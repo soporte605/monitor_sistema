@@ -195,6 +195,16 @@ pub enum ResultadoCierre {
     Cambio,
 }
 
+/// Margen, en segundos, al comparar horas de inicio. En Linux se calculan a partir de la
+/// hora de arranque del sistema, que puede variar ~1 s entre lecturas o por ajustes de NTP;
+/// sin margen, la protección contra PID reutilizado impediría cerrar cualquier proceso.
+const TOLERANCIA_INICIO: u64 = 2;
+
+/// Dos horas de inicio corresponden al mismo proceso.
+fn mismo_inicio(a: u64, b: u64) -> bool {
+    a.abs_diff(b) <= TOLERANCIA_INICIO
+}
+
 fn refrescar(sys: &mut System, pid: Pid) {
     sys.refresh_processes_specifics(
         ProcessesToUpdate::Some(&[pid]),
@@ -208,7 +218,7 @@ fn esta_vivo(sys: &mut System, p: &PuertoInfo) -> bool {
     let pid = Pid::from_u32(p.pid);
     refrescar(sys, pid);
     sys.process(pid).is_some_and(|proceso| {
-        proceso.start_time() == p.inicio && proceso.status() != ProcessStatus::Zombie
+        mismo_inicio(proceso.start_time(), p.inicio) && proceso.status() != ProcessStatus::Zombie
     })
 }
 
@@ -224,7 +234,7 @@ pub fn terminar(p: &PuertoInfo, forzar: bool) -> ResultadoCierre {
     let Some(proceso) = sys.process(pid) else {
         return ResultadoCierre::YaTerminado;
     };
-    if proceso.start_time() != p.inicio {
+    if !mismo_inicio(proceso.start_time(), p.inicio) {
         return ResultadoCierre::Cambio;
     }
     if proceso.status() == ProcessStatus::Zombie {
@@ -470,6 +480,17 @@ mod tests {
     }
 
     #[test]
+    fn misma_hora_de_inicio_tolera_desfases_pequenos() {
+        // En Linux la hora de inicio depende de la hora de arranque del sistema,
+        // que puede variar ~1 s entre lecturas o por ajustes de NTP
+        assert!(mismo_inicio(1000, 1000));
+        assert!(mismo_inicio(1000, 1001));
+        assert!(mismo_inicio(1001, 999));
+        assert!(!mismo_inicio(1000, 1003));
+        assert!(!mismo_inicio(1000, 5000));
+    }
+
+    #[test]
     fn cadencia_de_lectura() {
         let ahora = Instant::now();
         assert!(toca_leer(None, ahora));
@@ -590,7 +611,7 @@ mod tests {
     fn pid_reutilizado_no_se_toca() {
         let (mut hijo, puerto) = lanzar_servidor();
         let mut info = info_del_hijo(&hijo, puerto);
-        info.inicio += 1; // simula otro proceso con el mismo PID
+        info.inicio += 10; // simula otro proceso con el mismo PID
 
         assert_eq!(terminar(&info, false), ResultadoCierre::Cambio);
         assert!(
