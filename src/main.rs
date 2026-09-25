@@ -6,13 +6,26 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::Duration;
 
-use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, Vec2};
+use eframe::egui::{
+    self, Align2, Color32, FontId, Key, Modifiers, Pos2, Rect, RichText, Sense, Stroke, StrokeKind,
+    Vec2, ViewportCommand, WindowLevel,
+};
 use egui_extras::{Column, TableBuilder};
 use sysinfo::{ProcessesToUpdate, System};
 
 const HISTORIAL: usize = 120; // puntos en la gráfica (≈ 1 minuto a 500 ms)
 const INTERVALO: Duration = Duration::from_millis(500);
 const TOP_PROCESOS: usize = 8;
+
+const TAM_VENTANA_MIN: Vec2 = Vec2::new(380.0, 400.0);
+const TAM_WIDGET: Vec2 = Vec2::new(240.0, 70.0);
+const MARGEN_WIDGET: f32 = 16.0; // separación del borde derecho de la pantalla
+const MARGEN_SUPERIOR_WIDGET: f32 = 48.0; // deja libre la barra de menús de macOS
+const COLOR_CPU: Color32 = Color32::from_rgb(33, 150, 243);
+const COLOR_RAM: Color32 = Color32::from_rgb(156, 39, 176);
+/// ⌘⇧M en macOS, Ctrl+Shift+M en Windows y Linux (⌘M ya es "minimizar" en macOS).
+const ATAJO_COMPACTO: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::M);
 
 /// Datos de un proceso, ya listos para mostrar.
 struct ProcesoInfo {
@@ -86,6 +99,12 @@ struct Monitor {
     actual: Option<Muestra>,
     hist_cpu: VecDeque<f32>,
     hist_ram: VecDeque<f32>,
+    /// Si la ventana está en modo compacto (widget flotante).
+    compacto: bool,
+    /// Posición y tamaño de la ventana completa, para restaurarla al salir del modo compacto.
+    ventana_completa: Option<(Pos2, Vec2)>,
+    /// Última posición del widget, para que vuelva donde se dejó.
+    pos_widget: Option<Pos2>,
 }
 
 impl Monitor {
@@ -95,7 +114,43 @@ impl Monitor {
             actual: None,
             hist_cpu: VecDeque::with_capacity(HISTORIAL),
             hist_ram: VecDeque::with_capacity(HISTORIAL),
+            compacto: false,
+            ventana_completa: None,
+            pos_widget: None,
         }
+    }
+
+    /// Cambia entre la ventana completa y el widget compacto siempre visible.
+    fn alternar_modo(&mut self, ctx: &egui::Context) {
+        let (exterior, interior, monitor) = ctx.input(|i| {
+            let v = i.viewport();
+            (v.outer_rect, v.inner_rect, v.monitor_size)
+        });
+
+        if self.compacto {
+            self.pos_widget = exterior.map(|r| r.min);
+            ctx.send_viewport_cmd(ViewportCommand::WindowLevel(WindowLevel::Normal));
+            ctx.send_viewport_cmd(ViewportCommand::Decorations(true));
+            ctx.send_viewport_cmd(ViewportCommand::Resizable(true));
+            ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(TAM_VENTANA_MIN));
+            if let Some((pos, tam)) = self.ventana_completa {
+                ctx.send_viewport_cmd(ViewportCommand::InnerSize(tam));
+                ctx.send_viewport_cmd(ViewportCommand::OuterPosition(pos));
+            }
+        } else {
+            self.ventana_completa = exterior.zip(interior).map(|(e, i)| (e.min, i.size()));
+            let pos = self
+                .pos_widget
+                .unwrap_or_else(|| pos_inicial_widget(monitor, TAM_WIDGET));
+            // El mínimo se baja antes de encoger, si no el sistema no deja reducir la ventana
+            ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(TAM_WIDGET));
+            ctx.send_viewport_cmd(ViewportCommand::Decorations(false));
+            ctx.send_viewport_cmd(ViewportCommand::Resizable(false));
+            ctx.send_viewport_cmd(ViewportCommand::InnerSize(TAM_WIDGET));
+            ctx.send_viewport_cmd(ViewportCommand::OuterPosition(pos));
+            ctx.send_viewport_cmd(ViewportCommand::WindowLevel(WindowLevel::AlwaysOnTop));
+        }
+        self.compacto = !self.compacto;
     }
 
     /// Toma las muestras nuevas que haya enviado el hilo lector (sin bloquear).
@@ -106,6 +161,15 @@ impl Monitor {
             self.actual = Some(m);
         }
     }
+}
+
+/// Dónde aparece el widget la primera vez: esquina superior derecha de la pantalla.
+fn pos_inicial_widget(monitor: Option<Vec2>, tam: Vec2) -> Pos2 {
+    let x = match monitor {
+        Some(m) => (m.x - tam.x - MARGEN_WIDGET).max(0.0),
+        None => MARGEN_WIDGET,
+    };
+    Pos2::new(x, MARGEN_SUPERIOR_WIDGET)
 }
 
 fn empujar(hist: &mut VecDeque<f32>, valor: f32) {
@@ -207,6 +271,17 @@ fn grafica(ui: &mut egui::Ui, datos: &VecDeque<f32>, color: Color32) {
         texto_tenue,
     );
 
+    dibujar_serie(&painter, r, datos, color, 2.0);
+}
+
+/// Dibuja la línea del historial con su relleno dentro de `r` (0 % abajo, 100 % arriba).
+fn dibujar_serie(
+    painter: &egui::Painter,
+    r: Rect,
+    datos: &VecDeque<f32>,
+    color: Color32,
+    grosor: f32,
+) {
     if datos.len() < 2 {
         return;
     }
@@ -234,7 +309,78 @@ fn grafica(ui: &mut egui::Ui, datos: &VecDeque<f32>, color: Color32) {
         ];
         painter.add(egui::Shape::convex_polygon(trapecio, relleno, Stroke::NONE));
     }
-    painter.add(egui::Shape::line(puntos, Stroke::new(2.0, color)));
+    painter.add(egui::Shape::line(puntos, Stroke::new(grosor, color)));
+}
+
+/// Mini gráfica sin ejes para el widget compacto.
+fn mini_grafica(ui: &mut egui::Ui, datos: &VecDeque<f32>, color: Color32, alto: f32) {
+    let (resp, painter) =
+        ui.allocate_painter(Vec2::new(ui.available_width(), alto), Sense::hover());
+    painter.rect_filled(resp.rect, 4.0, ui.visuals().extreme_bg_color);
+    dibujar_serie(&painter, resp.rect.shrink(1.0), datos, color, 1.5);
+}
+
+/// Icono de "imagen en imagen" (PiP): un marco con una ventana pequeña abajo a la derecha.
+/// La flecha apunta hacia la ventana pequeña para entrar y hacia fuera para salir.
+fn icono_pip(painter: &egui::Painter, rect: Rect, color: Color32, entrar: bool) {
+    let trazo = Stroke::new(1.4, color);
+    let marco = rect.shrink2(Vec2::new(1.0, 2.0));
+    painter.rect_stroke(marco, 2.0, trazo, StrokeKind::Inside);
+
+    let pequena = Rect::from_min_max(
+        Pos2::new(marco.center().x + 1.0, marco.center().y + 0.5),
+        marco.max - Vec2::splat(2.5),
+    );
+    painter.rect_filled(pequena, 1.0, color);
+
+    let esquina = marco.min + Vec2::splat(3.0);
+    let destino = pequena.min - Vec2::splat(1.5);
+    if entrar {
+        painter.arrow(esquina, destino - esquina, trazo);
+    } else {
+        painter.arrow(destino, esquina - destino, trazo);
+    }
+}
+
+/// Botón con el icono PiP; devuelve la respuesta para saber si se pulsó.
+fn boton_pip(ui: &mut egui::Ui, rect: Rect, entrar: bool, ayuda: &str) -> egui::Response {
+    let resp = ui
+        .interact(rect, ui.id().with(("pip", entrar)), Sense::click())
+        .on_hover_text(ayuda)
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    let color = if resp.hovered() {
+        ui.visuals().strong_text_color()
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    icono_pip(ui.painter(), rect, color, entrar);
+    resp
+}
+
+/// Una fila del widget compacto: etiqueta, porcentaje y mini gráfica.
+fn fila_compacta(
+    ui: &mut egui::Ui,
+    etiqueta: &str,
+    valor: f32,
+    hist: &VecDeque<f32>,
+    color: Color32,
+) {
+    const ALTO: f32 = 22.0;
+    ui.horizontal(|ui| {
+        ui.add_sized(
+            [30.0, ALTO],
+            egui::Label::new(RichText::new(etiqueta).strong()),
+        );
+        ui.add_sized(
+            [48.0, ALTO],
+            egui::Label::new(
+                RichText::new(format!("{valor:.0} %"))
+                    .color(color_carga(valor))
+                    .strong(),
+            ),
+        );
+        mini_grafica(ui, hist, color, ALTO);
+    });
 }
 
 /// Recuadro de sección que ocupa todo el ancho disponible.
@@ -255,10 +401,10 @@ fn barra(ui: &mut egui::Ui, p: f32, texto: String) {
     );
 }
 
-impl eframe::App for Monitor {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.recibir();
-
+impl Monitor {
+    /// Vista completa. Devuelve `true` si se pulsó el botón de modo compacto.
+    fn ui_completa(&self, ui: &mut egui::Ui) -> bool {
+        let mut cambiar = false;
         egui::CentralPanel::default().show(ui, |ui| {
             // Hasta que llegue la primera lectura
             let Some(m) = &self.actual else {
@@ -274,6 +420,16 @@ impl eframe::App for Monitor {
                         ui.heading(RichText::new("Monitor del sistema").strong());
                         ui.label(RichText::new(concat!("v", env!("CARGO_PKG_VERSION"))).weak());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let (rect, _) =
+                                ui.allocate_exact_size(Vec2::new(20.0, 16.0), Sense::hover());
+                            let ayuda = format!(
+                                "Modo compacto (siempre visible) · {}",
+                                ui.ctx().format_shortcut(&ATAJO_COMPACTO)
+                            );
+                            if boton_pip(ui, rect, true, &ayuda).clicked() {
+                                cambiar = true;
+                            }
+                            ui.add_space(4.0);
                             let up = System::uptime();
                             ui.label(format!(
                                 "Encendido: {}h {:02}m",
@@ -301,7 +457,7 @@ impl eframe::App for Monitor {
                                     .strong(),
                             );
                         });
-                        grafica(ui, &self.hist_cpu, Color32::from_rgb(33, 150, 243));
+                        grafica(ui, &self.hist_cpu, COLOR_CPU);
                         ui.add_space(6.0);
 
                         ui.label(format!("{} núcleos", m.nucleos.len()));
@@ -346,7 +502,7 @@ impl eframe::App for Monitor {
                                     .strong(),
                             );
                         });
-                        grafica(ui, &self.hist_ram, Color32::from_rgb(156, 39, 176));
+                        grafica(ui, &self.hist_ram, COLOR_RAM);
                         ui.add_space(6.0);
                         barra(
                             ui,
@@ -428,6 +584,81 @@ impl eframe::App for Monitor {
                     });
                 });
         });
+        cambiar
+    }
+
+    /// Widget compacto: CPU y RAM con mini gráficas, sin barra de título y siempre encima.
+    /// Se arrastra desde cualquier punto. Devuelve `true` si se pidió volver a la ventana completa.
+    fn ui_compacta(&self, ui: &mut egui::Ui) -> bool {
+        let mut salir = false;
+        let visuals = ui.visuals().clone();
+        egui::Frame::new()
+            .fill(visuals.window_fill)
+            .stroke(visuals.window_stroke)
+            .corner_radius(10.0)
+            .inner_margin(egui::Margin::symmetric(10, 8))
+            .show(ui, |ui| {
+                ui.set_min_size(ui.available_size());
+                // Sin texto seleccionable, para que arrastrar sobre las etiquetas mueva la ventana
+                ui.style_mut().interaction.selectable_labels = false;
+
+                let zona = ui.max_rect();
+                let fondo = ui.interact(zona, ui.id().with("arrastre"), Sense::click_and_drag());
+                if fondo.drag_started() {
+                    ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
+                }
+                if fondo.double_clicked() {
+                    salir = true;
+                }
+
+                let Some(m) = &self.actual else {
+                    ui.centered_and_justified(|ui| ui.spinner());
+                    return;
+                };
+                fila_compacta(ui, "CPU", m.cpu_global, &self.hist_cpu, COLOR_CPU);
+                let p_ram = porcentaje(m.mem_usada, m.mem_total);
+                fila_compacta(ui, "RAM", p_ram, &self.hist_ram, COLOR_RAM);
+
+                // El botón para volver solo aparece al pasar el ratón, como en el PiP de macOS
+                if ui.rect_contains_pointer(ui.clip_rect()) {
+                    let rect = Rect::from_min_size(
+                        Pos2::new(zona.right() - 20.0, zona.top() + 3.0),
+                        Vec2::new(20.0, 16.0),
+                    );
+                    ui.painter()
+                        .rect_filled(rect.expand(3.0), 4.0, visuals.window_fill);
+                    let ayuda = format!(
+                        "Volver a la ventana completa · {} o doble clic",
+                        ui.ctx().format_shortcut(&ATAJO_COMPACTO)
+                    );
+                    if boton_pip(ui, rect, false, &ayuda).clicked() {
+                        salir = true;
+                    }
+                }
+            });
+        salir
+    }
+}
+
+impl eframe::App for Monitor {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.recibir();
+
+        let atajo = ui.ctx().input_mut(|i| i.consume_shortcut(&ATAJO_COMPACTO));
+        let cambiar = if self.compacto {
+            self.ui_compacta(ui)
+        } else {
+            self.ui_completa(ui)
+        };
+        if atajo || cambiar {
+            self.alternar_modo(ui.ctx());
+        }
+    }
+
+    /// Fondo transparente: así el widget compacto puede tener las esquinas redondeadas.
+    /// En modo completo el panel central cubre toda la ventana, así que no se nota.
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        [0.0; 4]
     }
 }
 
@@ -436,7 +667,8 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_title("Monitor del sistema")
             .with_inner_size([460.0, 760.0])
-            .with_min_inner_size([380.0, 400.0]),
+            .with_min_inner_size(TAM_VENTANA_MIN)
+            .with_transparent(true),
         ..Default::default()
     };
 
@@ -445,4 +677,42 @@ fn main() -> eframe::Result {
         opciones,
         Box::new(|cc| Ok(Box::new(Monitor::new(cc.egui_ctx.clone())))),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn widget_en_esquina_superior_derecha() {
+        let pos = pos_inicial_widget(Some(Vec2::new(1440.0, 900.0)), Vec2::new(240.0, 70.0));
+        assert_eq!(
+            pos,
+            Pos2::new(1440.0 - 240.0 - MARGEN_WIDGET, MARGEN_SUPERIOR_WIDGET)
+        );
+    }
+
+    #[test]
+    fn widget_sin_datos_del_monitor_va_arriba_a_la_izquierda() {
+        let pos = pos_inicial_widget(None, Vec2::new(240.0, 70.0));
+        assert_eq!(pos, Pos2::new(MARGEN_WIDGET, MARGEN_SUPERIOR_WIDGET));
+    }
+
+    #[test]
+    fn widget_nunca_sale_por_la_izquierda_en_pantallas_diminutas() {
+        let pos = pos_inicial_widget(Some(Vec2::new(100.0, 100.0)), Vec2::new(240.0, 70.0));
+        assert_eq!(pos.x, 0.0);
+    }
+
+    #[test]
+    fn porcentaje_con_total_cero() {
+        assert_eq!(porcentaje(5, 0), 0.0);
+        assert_eq!(porcentaje(1, 4), 25.0);
+    }
+
+    #[test]
+    fn formato_en_unidades_binarias() {
+        assert_eq!(formato_bytes(512 * 1024 * 1024), "512 MiB");
+        assert_eq!(formato_bytes(3 * 1024 * 1024 * 1024 / 2), "1.50 GiB");
+    }
 }
