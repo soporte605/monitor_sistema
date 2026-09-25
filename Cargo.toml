@@ -13,3 +13,4 @@ categories = ["gui", "os"]
 eframe = "0.36.2"
 egui_extras = "0.36.2"
 sysinfo = "0.39.6"
+listeners = "0.6.1"

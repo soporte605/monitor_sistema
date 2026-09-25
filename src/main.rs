@@ -16,6 +16,11 @@ use eframe::egui::{
 use egui_extras::{Column, TableBuilder};
 use sysinfo::{ProcessesToUpdate, System};
 
+// Mientras la interfaz no use el módulo (tareas 1 a 5), se evita el aviso de código sin usar.
+// La tarea 6 quita este atributo.
+#[cfg_attr(not(test), allow(dead_code))]
+mod puertos;
+
 const HISTORIAL: usize = 120; // puntos en la gráfica (≈ 1 minuto a 500 ms)
 const INTERVALO: Duration = Duration::from_millis(500);
 const TOP_PROCESOS: usize = 8;
