@@ -7,7 +7,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -18,9 +18,6 @@ use eframe::egui::{
 use egui_extras::{Column, TableBuilder};
 use sysinfo::{ProcessesToUpdate, System};
 
-// Mientras la interfaz no use el módulo (tareas 1 a 5), se evita el aviso de código sin usar.
-// La tarea 6 quita este atributo.
-#[cfg_attr(not(test), allow(dead_code))]
 mod puertos;
 
 const HISTORIAL: usize = 120; // puntos en la gráfica (≈ 1 minuto a 500 ms)
@@ -35,6 +32,10 @@ const COLOR_CPU: Color32 = Color32::from_rgb(33, 150, 243);
 const COLOR_RAM: Color32 = Color32::from_rgb(156, 39, 176);
 /// Rojo suave para acciones que terminan procesos.
 const COLOR_PELIGRO: Color32 = Color32::from_rgb(229, 115, 115);
+/// Rojo intenso para el botón que confirma el cierre (texto blanco encima).
+const COLOR_PELIGRO_FUERTE: Color32 = Color32::from_rgb(198, 40, 40);
+/// Cuánto se ve el aviso tras terminar un proceso.
+const DURACION_AVISO: Duration = Duration::from_secs(4);
 /// ⌘⇧M en macOS, Ctrl+Shift+M en Windows y Linux (⌘M ya es "minimizar" en macOS).
 const ATAJO_COMPACTO: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::M);
@@ -130,7 +131,6 @@ enum Pestana {
 }
 
 /// Estado de una fila de puertos mientras se intenta terminar su proceso.
-#[allow(dead_code)] // Temporal: la tarea 6 conecta el cierre y lo quita
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EstadoCierre {
     Cerrando,
@@ -138,12 +138,22 @@ enum EstadoCierre {
 }
 
 /// Petición de confirmación pendiente para terminar (o forzar) un proceso.
-#[allow(dead_code)] // Temporal: la tarea 6 conecta el cierre y lo quita
 #[derive(Clone)]
 struct Confirmacion {
     puerto: puertos::PuertoInfo,
     forzar: bool,
 }
+
+/// Aviso temporal sobre la lista de puertos.
+#[derive(Clone)]
+struct Aviso {
+    texto: String,
+    ok: bool,
+    hasta: Instant,
+}
+
+/// Lo que devuelve el hilo de cierre: puerto, si se forzó y resultado.
+type RespuestaCierre = (puertos::PuertoInfo, bool, puertos::ResultadoCierre);
 
 struct Monitor {
     rx: Receiver<Muestra>,
@@ -165,11 +175,15 @@ struct Monitor {
     /// Filas con un cierre en marcha, por (puerto, PID).
     en_curso: HashMap<(u16, u32), EstadoCierre>,
     confirmacion: Option<Confirmacion>,
+    aviso: Option<Aviso>,
+    tx_cierre: Sender<RespuestaCierre>,
+    rx_cierre: Receiver<RespuestaCierre>,
 }
 
 impl Monitor {
     fn new(ctx: egui::Context) -> Self {
         let leer_puertos = Arc::new(AtomicBool::new(true));
+        let (tx_cierre, rx_cierre) = mpsc::channel();
         Self {
             rx: iniciar_lector(ctx, leer_puertos.clone()),
             actual: None,
@@ -184,6 +198,9 @@ impl Monitor {
             busqueda: String::new(),
             en_curso: HashMap::new(),
             confirmacion: None,
+            aviso: None,
+            tx_cierre,
+            rx_cierre,
         }
     }
 
@@ -231,6 +248,49 @@ impl Monitor {
             }
             self.actual = Some(m);
         }
+        let cierres: Vec<RespuestaCierre> = self.rx_cierre.try_iter().collect();
+        for (p, forzar, r) in cierres {
+            self.procesar_cierre(p, forzar, r);
+        }
+    }
+
+    /// Marca la fila como «Cerrando…» y termina el proceso en un hilo aparte.
+    fn lanzar_cierre(&mut self, p: puertos::PuertoInfo, forzar: bool, ctx: &egui::Context) {
+        self.en_curso
+            .insert((p.puerto, p.pid), EstadoCierre::Cerrando);
+        let tx = self.tx_cierre.clone();
+        let ctx = ctx.clone();
+        thread::spawn(move || {
+            let r = puertos::terminar(&p, forzar);
+            let _ = tx.send((p, forzar, r));
+            ctx.request_repaint();
+        });
+    }
+
+    /// Aplica el resultado de un cierre: estado de la fila, lista y aviso.
+    fn procesar_cierre(
+        &mut self,
+        p: puertos::PuertoInfo,
+        forzar: bool,
+        r: puertos::ResultadoCierre,
+    ) {
+        let clave = (p.puerto, p.pid);
+        if r == puertos::ResultadoCierre::NoResponde && !forzar {
+            self.en_curso.insert(clave, EstadoCierre::NoResponde);
+            return;
+        }
+        self.en_curso.remove(&clave);
+        if r.quita_fila()
+            && let Some(Ok(lista)) = &mut self.puertos
+        {
+            lista.retain(|x| (x.puerto, x.pid) != clave);
+        }
+        let (texto, ok) = puertos::mensaje_resultado(r, p.puerto);
+        self.aviso = Some(Aviso {
+            texto,
+            ok,
+            hasta: Instant::now() + DURACION_AVISO,
+        });
     }
 
     /// Guarda una lectura nueva de puertos y olvida los cierres de filas que ya no existen.
@@ -739,6 +799,22 @@ impl Monitor {
 
     /// Pestaña «Puertos»: buscador y tabla de puertos de desarrollo.
     fn vista_puertos(&mut self, ui: &mut egui::Ui) {
+        // Aviso temporal tras terminar un proceso
+        let ahora = Instant::now();
+        match self.aviso.clone() {
+            Some(aviso) if aviso.hasta > ahora => {
+                let color = if aviso.ok {
+                    color_carga(0.0)
+                } else {
+                    COLOR_PELIGRO
+                };
+                ui.label(RichText::new(&aviso.texto).color(color).strong());
+                ui.ctx().request_repaint_after(aviso.hasta - ahora);
+            }
+            Some(_) => self.aviso = None,
+            None => {}
+        }
+
         ui.add(
             egui::TextEdit::singleline(&mut self.busqueda)
                 .hint_text("🔍 Buscar puerto o proceso…")
@@ -879,6 +955,75 @@ impl Monitor {
         );
     }
 
+    /// Diálogo modal para confirmar que se termina (o se fuerza) un proceso.
+    fn dialogo_confirmacion(&mut self, ctx: &egui::Context) {
+        let Some(conf) = self.confirmacion.clone() else {
+            return;
+        };
+        let p = &conf.puerto;
+        let mut decision: Option<bool> = None; // Some(true) = terminar, Some(false) = cancelar
+
+        let modal = egui::Modal::new(egui::Id::new("confirmar_cierre")).show(ctx, |ui| {
+            ui.set_max_width(340.0);
+            if conf.forzar {
+                ui.heading(format!("Forzar el cierre del puerto {}", p.puerto));
+                ui.label("El proceso no respondió. ¿Forzar el cierre? No podrá guardar nada.");
+            } else {
+                ui.heading(format!("¿Terminar el proceso del puerto {}?", p.puerto));
+            }
+            ui.add_space(6.0);
+            ui.strong(format!("{} · PID {}", p.nombre, p.pid));
+            // Línea de comandos completa, con ajuste de línea
+            ui.label(RichText::new(&p.comando).small().weak());
+            if !conf.forzar {
+                ui.add_space(6.0);
+                ui.label(if cfg!(windows) {
+                    "En Windows el cierre es inmediato. Si tiene trabajo sin guardar, se perderá."
+                } else {
+                    "Si tiene trabajo sin guardar, se perderá."
+                });
+            }
+            ui.add_space(10.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let accion = if conf.forzar {
+                    "Forzar cierre"
+                } else {
+                    "Terminar"
+                };
+                if ui
+                    .add(
+                        egui::Button::new(RichText::new(accion).color(Color32::WHITE))
+                            .fill(COLOR_PELIGRO_FUERTE),
+                    )
+                    .clicked()
+                {
+                    decision = Some(true);
+                }
+                let cancelar = ui.button("Cancelar");
+                if cancelar.clicked() {
+                    decision = Some(false);
+                }
+                // «Cancelar» es la opción por defecto: Intro la activa
+                if ui.memory(|m| m.focused().is_none()) {
+                    cancelar.request_focus();
+                }
+            });
+        });
+        // Esc o clic fuera del diálogo: cancelar
+        if decision.is_none() && modal.should_close() {
+            decision = Some(false);
+        }
+
+        match decision {
+            Some(true) => {
+                self.confirmacion = None;
+                self.lanzar_cierre(conf.puerto, conf.forzar, ctx);
+            }
+            Some(false) => self.confirmacion = None,
+            None => {}
+        }
+    }
+
     /// Widget compacto: CPU y RAM con mini gráficas, sin barra de título y siempre encima.
     /// Se arrastra desde cualquier punto. Devuelve `true` si se pidió volver a la ventana completa.
     fn ui_compacta(&self, ui: &mut egui::Ui) -> bool {
@@ -941,7 +1086,9 @@ impl eframe::App for Monitor {
         let cambiar = if self.compacto {
             self.ui_compacta(ui)
         } else {
-            self.ui_completa(ui)
+            let cambiar = self.ui_completa(ui);
+            self.dialogo_confirmacion(ui.ctx());
+            cambiar
         };
         if atajo || cambiar {
             self.alternar_modo(ui.ctx());

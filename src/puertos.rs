@@ -256,6 +256,37 @@ pub fn terminar(p: &PuertoInfo, forzar: bool) -> ResultadoCierre {
     ResultadoCierre::NoResponde
 }
 
+impl ResultadoCierre {
+    /// La fila debe desaparecer de la lista (el puerto quedó libre o el dato ya no vale).
+    pub fn quita_fila(self) -> bool {
+        matches!(
+            self,
+            ResultadoCierre::Cerrado | ResultadoCierre::YaTerminado | ResultadoCierre::Cambio
+        )
+    }
+}
+
+/// Texto del aviso tras intentar terminar un proceso, y si es un éxito.
+pub fn mensaje_resultado(r: ResultadoCierre, puerto: u16) -> (String, bool) {
+    match r {
+        ResultadoCierre::Cerrado => (format!("✓ Puerto {puerto} liberado"), true),
+        ResultadoCierre::YaTerminado => ("El proceso ya había terminado.".to_string(), true),
+        ResultadoCierre::SinPermiso => (
+            "No tienes permiso para terminar este proceso.".to_string(),
+            false,
+        ),
+        ResultadoCierre::Cambio => (
+            "El proceso ya no existe o cambió. La lista se ha actualizado.".to_string(),
+            false,
+        ),
+        // Solo llega aquí tras «Forzar cierre»
+        ResultadoCierre::NoResponde => (
+            "El proceso no se cerró. Puede que necesites permisos de administrador.".to_string(),
+            false,
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -444,6 +475,42 @@ mod tests {
         assert!(toca_leer(None, ahora));
         assert!(!toca_leer(Some(ahora), ahora + Duration::from_millis(1500)));
         assert!(toca_leer(Some(ahora), ahora + INTERVALO_PUERTOS));
+    }
+
+    #[test]
+    fn mensajes_de_resultado() {
+        assert_eq!(
+            mensaje_resultado(ResultadoCierre::Cerrado, 4200),
+            ("✓ Puerto 4200 liberado".to_string(), true)
+        );
+        assert_eq!(
+            mensaje_resultado(ResultadoCierre::YaTerminado, 4200),
+            ("El proceso ya había terminado.".to_string(), true)
+        );
+        assert_eq!(
+            mensaje_resultado(ResultadoCierre::SinPermiso, 4200),
+            (
+                "No tienes permiso para terminar este proceso.".to_string(),
+                false
+            )
+        );
+        assert_eq!(
+            mensaje_resultado(ResultadoCierre::Cambio, 4200),
+            (
+                "El proceso ya no existe o cambió. La lista se ha actualizado.".to_string(),
+                false
+            )
+        );
+        assert!(!mensaje_resultado(ResultadoCierre::NoResponde, 4200).1);
+    }
+
+    #[test]
+    fn que_resultados_quitan_la_fila() {
+        assert!(ResultadoCierre::Cerrado.quita_fila());
+        assert!(ResultadoCierre::YaTerminado.quita_fila());
+        assert!(ResultadoCierre::Cambio.quita_fila());
+        assert!(!ResultadoCierre::NoResponde.quita_fila());
+        assert!(!ResultadoCierre::SinPermiso.quita_fila());
     }
 
     use std::io::{BufRead, BufReader};
