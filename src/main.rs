@@ -2,7 +2,9 @@
 // GUI: eframe/egui  ·  Datos del sistema: sysinfo
 
 use std::collections::VecDeque;
-use std::time::{Duration, Instant};
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
+use std::time::Duration;
 
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 use egui_extras::{Column, TableBuilder};
@@ -10,39 +12,99 @@ use sysinfo::{ProcessesToUpdate, System};
 
 const HISTORIAL: usize = 120; // puntos en la gráfica (≈ 1 minuto a 500 ms)
 const INTERVALO: Duration = Duration::from_millis(500);
+const TOP_PROCESOS: usize = 8;
+
+/// Datos de un proceso, ya listos para mostrar.
+struct ProcesoInfo {
+    pid: u32,
+    nombre: String,
+    cpu: f32,
+    memoria: u64,
+}
+
+/// Una lectura completa del sistema, producida por el hilo lector.
+struct Muestra {
+    cpu_global: f32,
+    nucleos: Vec<f32>,
+    mem_usada: u64,
+    mem_total: u64,
+    swap_usada: u64,
+    swap_total: u64,
+    procesos: Vec<ProcesoInfo>,
+}
+
+/// Lanza un hilo que lee el sistema cada `INTERVALO` y envía una `Muestra` por el canal.
+/// Así la interfaz nunca se bloquea esperando a `sysinfo`.
+fn iniciar_lector(ctx: egui::Context) -> Receiver<Muestra> {
+    let (tx, rx) = mpsc::channel();
+
+    thread::spawn(move || {
+        let mut sys = System::new_all();
+        loop {
+            // El uso de CPU se calcula entre dos lecturas, por eso primero se espera
+            thread::sleep(INTERVALO);
+            sys.refresh_cpu_usage();
+            sys.refresh_memory();
+            sys.refresh_processes(ProcessesToUpdate::All, true);
+
+            let mut procesos: Vec<ProcesoInfo> = sys
+                .processes()
+                .values()
+                .map(|p| ProcesoInfo {
+                    pid: p.pid().as_u32(),
+                    nombre: p.name().to_string_lossy().into_owned(),
+                    cpu: p.cpu_usage(),
+                    memoria: p.memory(),
+                })
+                .collect();
+            procesos.sort_by(|a, b| b.cpu.total_cmp(&a.cpu));
+            procesos.truncate(TOP_PROCESOS);
+
+            let muestra = Muestra {
+                cpu_global: sys.global_cpu_usage(),
+                nucleos: sys.cpus().iter().map(|c| c.cpu_usage()).collect(),
+                mem_usada: sys.used_memory(),
+                mem_total: sys.total_memory(),
+                swap_usada: sys.used_swap(),
+                swap_total: sys.total_swap(),
+                procesos,
+            };
+
+            // Si la ventana se cerró, el receptor ya no existe y el hilo termina
+            if tx.send(muestra).is_err() {
+                break;
+            }
+            ctx.request_repaint();
+        }
+    });
+
+    rx
+}
 
 struct Monitor {
-    sys: System,
-    ultima_lectura: Instant,
+    rx: Receiver<Muestra>,
+    actual: Option<Muestra>,
     hist_cpu: VecDeque<f32>,
     hist_ram: VecDeque<f32>,
 }
 
 impl Monitor {
-    fn new() -> Self {
-        let mut sys = System::new_all();
-        sys.refresh_all();
+    fn new(ctx: egui::Context) -> Self {
         Self {
-            sys,
-            ultima_lectura: Instant::now() - INTERVALO,
+            rx: iniciar_lector(ctx),
+            actual: None,
             hist_cpu: VecDeque::with_capacity(HISTORIAL),
             hist_ram: VecDeque::with_capacity(HISTORIAL),
         }
     }
 
-    /// Lee los datos del sistema si ya pasó el intervalo.
-    fn actualizar(&mut self) {
-        if self.ultima_lectura.elapsed() < INTERVALO {
-            return;
+    /// Toma las muestras nuevas que haya enviado el hilo lector (sin bloquear).
+    fn recibir(&mut self) {
+        for m in self.rx.try_iter() {
+            empujar(&mut self.hist_cpu, m.cpu_global);
+            empujar(&mut self.hist_ram, porcentaje(m.mem_usada, m.mem_total));
+            self.actual = Some(m);
         }
-        self.ultima_lectura = Instant::now();
-
-        self.sys.refresh_cpu_usage();
-        self.sys.refresh_memory();
-        self.sys.refresh_processes(ProcessesToUpdate::All, true);
-
-        empujar(&mut self.hist_cpu, self.sys.global_cpu_usage());
-        empujar(&mut self.hist_ram, porcentaje(self.sys.used_memory(), self.sys.total_memory()));
     }
 }
 
@@ -125,10 +187,15 @@ fn barra(ui: &mut egui::Ui, p: f32, texto: String) {
 
 impl eframe::App for Monitor {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.actualizar();
-        let ctx = ui.ctx().clone();
+        self.recibir();
 
         egui::CentralPanel::default().show(ui, |ui| {
+            // Hasta que llegue la primera lectura
+            let Some(m) = &self.actual else {
+                ui.centered_and_justified(|ui| ui.spinner());
+                return;
+            };
+
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 // ── Encabezado ─────────────────────────────
                 ui.horizontal(|ui| {
@@ -148,7 +215,7 @@ impl eframe::App for Monitor {
                 ui.add_space(8.0);
 
                 // ── CPU ────────────────────────────────────
-                let cpu = self.sys.global_cpu_usage();
+                let cpu = m.cpu_global;
                 seccion(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.strong("CPU");
@@ -157,17 +224,16 @@ impl eframe::App for Monitor {
                     grafica(ui, &self.hist_cpu, Color32::from_rgb(33, 150, 243));
                     ui.add_space(6.0);
 
-                    ui.label(format!("{} núcleos", self.sys.cpus().len()));
+                    ui.label(format!("{} núcleos", m.nucleos.len()));
                     // Cuántas barras caben por fila según el ancho (mínimo 150 px cada una)
                     let separacion = 8.0;
                     let ancho = ui.available_width();
                     let caben = ((ancho + separacion) / (150.0 + separacion)).floor().max(1.0) as usize;
-                    let columnas = caben.min(self.sys.cpus().len().max(1));
+                    let columnas = caben.min(m.nucleos.len().max(1));
                     let ancho_barra = (ancho - separacion * (columnas - 1) as f32) / columnas as f32;
 
                     egui::Grid::new("nucleos").num_columns(columnas).spacing([separacion, 4.0]).show(ui, |ui| {
-                        for (i, c) in self.sys.cpus().iter().enumerate() {
-                            let p = c.cpu_usage();
+                        for (i, &p) in m.nucleos.iter().enumerate() {
                             ui.add_sized([ancho_barra, 18.0], egui::ProgressBar::new(p / 100.0)
                                 .text(format!("Núcleo {i}: {p:.0} %"))
                                 .fill(color_carga(p))
@@ -181,8 +247,7 @@ impl eframe::App for Monitor {
                 ui.add_space(8.0);
 
                 // ── Memoria ────────────────────────────────
-                let (usada, total) = (self.sys.used_memory(), self.sys.total_memory());
-                let p_ram = porcentaje(usada, total);
+                let p_ram = porcentaje(m.mem_usada, m.mem_total);
                 seccion(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.strong("Memoria RAM");
@@ -190,12 +255,11 @@ impl eframe::App for Monitor {
                     });
                     grafica(ui, &self.hist_ram, Color32::from_rgb(156, 39, 176));
                     ui.add_space(6.0);
-                    barra(ui, p_ram, format!("{:.2} GB de {:.2} GB", gb(usada), gb(total)));
+                    barra(ui, p_ram, format!("{:.2} GB de {:.2} GB", gb(m.mem_usada), gb(m.mem_total)));
 
-                    let (su, st) = (self.sys.used_swap(), self.sys.total_swap());
-                    if st > 0 {
-                        let p = porcentaje(su, st);
-                        barra(ui, p, format!("Swap: {:.2} GB de {:.2} GB", gb(su), gb(st)));
+                    if m.swap_total > 0 {
+                        let p = porcentaje(m.swap_usada, m.swap_total);
+                        barra(ui, p, format!("Swap: {:.2} GB de {:.2} GB", gb(m.swap_usada), gb(m.swap_total)));
                     }
                 });
                 ui.add_space(8.0);
@@ -203,9 +267,6 @@ impl eframe::App for Monitor {
                 // ── Top procesos ───────────────────────────
                 seccion(ui, |ui| {
                     ui.strong("Procesos que más CPU usan");
-                    let mut procesos: Vec<_> = self.sys.processes().values().collect();
-                    procesos.sort_by(|a, b| b.cpu_usage().total_cmp(&a.cpu_usage()));
-
                     ui.add_space(4.0);
 
                     // La columna "Nombre" toma el espacio sobrante y recorta con "…"
@@ -225,20 +286,19 @@ impl eframe::App for Monitor {
                             fila.col(|ui| { ui.with_layout(derecha, |ui| ui.strong("Memoria")); });
                         })
                         .body(|mut cuerpo| {
-                            for p in procesos.iter().take(8) {
+                            for p in &m.procesos {
                                 cuerpo.row(20.0, |mut fila| {
-                                    fila.col(|ui| { ui.label(p.pid().to_string()); });
+                                    fila.col(|ui| { ui.label(p.pid.to_string()); });
                                     fila.col(|ui| {
-                                        let nombre = p.name().to_string_lossy();
-                                        ui.add(egui::Label::new(nombre.as_ref()).truncate())
-                                            .on_hover_text(nombre.as_ref());
+                                        ui.add(egui::Label::new(&p.nombre).truncate())
+                                            .on_hover_text(&p.nombre);
                                     });
                                     fila.col(|ui| {
-                                        ui.with_layout(derecha, |ui| ui.label(format!("{:.1} %", p.cpu_usage())));
+                                        ui.with_layout(derecha, |ui| ui.label(format!("{:.1} %", p.cpu)));
                                     });
                                     fila.col(|ui| {
                                         ui.with_layout(derecha, |ui| {
-                                            ui.label(format!("{:.0} MB", p.memory() as f64 / 1024.0 / 1024.0))
+                                            ui.label(format!("{:.0} MB", p.memoria as f64 / 1024.0 / 1024.0))
                                         });
                                     });
                                 });
@@ -247,9 +307,6 @@ impl eframe::App for Monitor {
                 });
             });
         });
-
-        // Pedir redibujado para que se actualice solo
-        ctx.request_repaint_after(INTERVALO);
     }
 }
 
@@ -265,6 +322,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "Monitor del sistema",
         opciones,
-        Box::new(|_cc| Ok(Box::new(Monitor::new()))),
+        Box::new(|cc| Ok(Box::new(Monitor::new(cc.egui_ctx.clone())))),
     )
 }
