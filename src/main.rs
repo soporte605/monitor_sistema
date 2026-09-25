@@ -6,7 +6,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::Duration;
 
-use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Stroke, Vec2};
+use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 use egui_extras::{Column, TableBuilder};
 use sysinfo::{ProcessesToUpdate, System};
 
@@ -119,8 +119,13 @@ fn porcentaje(usado: u64, total: u64) -> f32 {
     if total == 0 { 0.0 } else { usado as f32 / total as f32 * 100.0 }
 }
 
-fn gb(bytes: u64) -> f64 {
-    bytes as f64 / 1024.0 / 1024.0 / 1024.0
+const MIB: f64 = 1024.0 * 1024.0;
+const GIB: f64 = 1024.0 * MIB;
+
+/// Formatea bytes en unidades binarias (MiB o GiB), que es lo que dan las divisiones entre 1024.
+fn formato_bytes(bytes: u64) -> String {
+    let b = bytes as f64;
+    if b >= GIB { format!("{:.2} GiB", b / GIB) } else { format!("{:.0} MiB", b / MIB) }
 }
 
 /// Verde → amarillo → rojo según el porcentaje.
@@ -132,20 +137,55 @@ fn color_carga(p: f32) -> Color32 {
     }
 }
 
-/// Dibuja una gráfica de línea con relleno (0–100 %).
+/// Dibuja una gráfica de línea con relleno (0–100 %), con referencias
+/// de porcentaje a la izquierda y de tiempo debajo.
 fn grafica(ui: &mut egui::Ui, datos: &VecDeque<f32>, color: Color32) {
-    let (resp, painter) =
-        ui.allocate_painter(Vec2::new(ui.available_width(), 110.0), Sense::hover());
-    let r = resp.rect;
+    const MARGEN_IZQ: f32 = 38.0; // espacio para "100 %"
+    const MARGEN_INF: f32 = 14.0; // espacio para "hace 60 s … ahora"
+    const ALTO_GRAFICA: f32 = 110.0;
+
+    let (resp, painter) = ui.allocate_painter(
+        Vec2::new(ui.available_width(), ALTO_GRAFICA + MARGEN_INF),
+        Sense::hover(),
+    );
+    let total = resp.rect;
+    let r = Rect::from_min_max(
+        Pos2::new(total.left() + MARGEN_IZQ, total.top()),
+        Pos2::new(total.right(), total.top() + ALTO_GRAFICA),
+    );
+
+    let texto_tenue = ui.visuals().weak_text_color();
+    let fuente = FontId::proportional(10.0);
 
     painter.rect_filled(r, 6.0, ui.visuals().extreme_bg_color);
-    for i in 1..4 {
-        let y = r.top() + r.height() * i as f32 / 4.0;
-        painter.line_segment(
-            [Pos2::new(r.left(), y), Pos2::new(r.right(), y)],
-            Stroke::new(1.0, ui.visuals().faint_bg_color),
-        );
+
+    // Líneas guía cada 25 % y etiquetas en 0, 50 y 100 %
+    for i in 0..=4 {
+        let y = r.bottom() - r.height() * i as f32 / 4.0;
+        if i > 0 && i < 4 {
+            painter.line_segment(
+                [Pos2::new(r.left(), y), Pos2::new(r.right(), y)],
+                Stroke::new(1.0, ui.visuals().faint_bg_color),
+            );
+        }
+        if i % 2 == 0 {
+            // Se aleja un poco de los bordes para que no se corte el texto
+            let y_texto = y.clamp(r.top() + 6.0, r.bottom() - 6.0);
+            painter.text(
+                Pos2::new(r.left() - 6.0, y_texto),
+                Align2::RIGHT_CENTER,
+                format!("{} %", i * 25),
+                fuente.clone(),
+                texto_tenue,
+            );
+        }
     }
+
+    // Referencias de tiempo
+    let segundos = (HISTORIAL - 1) as f32 * INTERVALO.as_secs_f32();
+    let y_tiempo = r.bottom() + MARGEN_INF / 2.0 + 1.0;
+    painter.text(Pos2::new(r.left(), y_tiempo), Align2::LEFT_CENTER, format!("hace {segundos:.0} s"), fuente.clone(), texto_tenue);
+    painter.text(Pos2::new(r.right(), y_tiempo), Align2::RIGHT_CENTER, "ahora", fuente, texto_tenue);
 
     if datos.len() < 2 {
         return;
@@ -255,11 +295,11 @@ impl eframe::App for Monitor {
                     });
                     grafica(ui, &self.hist_ram, Color32::from_rgb(156, 39, 176));
                     ui.add_space(6.0);
-                    barra(ui, p_ram, format!("{:.2} GB de {:.2} GB", gb(m.mem_usada), gb(m.mem_total)));
+                    barra(ui, p_ram, format!("{} de {}", formato_bytes(m.mem_usada), formato_bytes(m.mem_total)));
 
                     if m.swap_total > 0 {
                         let p = porcentaje(m.swap_usada, m.swap_total);
-                        barra(ui, p, format!("Swap: {:.2} GB de {:.2} GB", gb(m.swap_usada), gb(m.swap_total)));
+                        barra(ui, p, format!("Swap: {} de {}", formato_bytes(m.swap_usada), formato_bytes(m.swap_total)));
                     }
                 });
                 ui.add_space(8.0);
@@ -298,7 +338,7 @@ impl eframe::App for Monitor {
                                     });
                                     fila.col(|ui| {
                                         ui.with_layout(derecha, |ui| {
-                                            ui.label(format!("{:.0} MB", p.memoria as f64 / 1024.0 / 1024.0))
+                                            ui.label(formato_bytes(p.memoria))
                                         });
                                     });
                                 });
