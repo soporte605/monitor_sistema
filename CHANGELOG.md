@@ -16,6 +16,7 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 - El listado de los 8 procesos principales se calcula una vez por lectura, en lugar de ordenar todos los procesos en cada redibujado.
 
 ### Corregido
+- El relleno de las gráficas de CPU y memoria ya no se sale por encima de la línea cuando el valor sube o baja.
 - La tabla de procesos ahora ocupa todo el ancho de la ventana; la columna "Nombre" se estira y recorta los nombres largos con "…" (el nombre completo aparece al pasar el ratón).
 - Las barras de los núcleos se reparten en columnas según el ancho disponible en lugar de tener 180 px fijos.
 - Las secciones de CPU, memoria y procesos ocupan siempre el ancho completo.

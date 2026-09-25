@@ -223,14 +223,16 @@ fn grafica(ui: &mut egui::Ui, datos: &VecDeque<f32>, color: Color32) {
         })
         .collect();
 
-    // Relleno: una franja vertical por segmento
+    // Relleno: un trapecio por segmento, desde la línea hasta la base (siempre convexo)
     let relleno = color.gamma_multiply(0.18);
     for w in puntos.windows(2) {
-        let rect = Rect::from_min_max(
-            Pos2::new(w[0].x, w[0].y.min(w[1].y)),
+        let trapecio = vec![
+            w[0],
+            w[1],
             Pos2::new(w[1].x, r.bottom()),
-        );
-        painter.rect_filled(rect, 0.0, relleno);
+            Pos2::new(w[0].x, r.bottom()),
+        ];
+        painter.add(egui::Shape::convex_polygon(trapecio, relleno, Stroke::NONE));
     }
     painter.add(egui::Shape::line(puntos, Stroke::new(2.0, color)));
 }
