@@ -7,6 +7,14 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Sin publicar]
 
+### Añadido
+- Referencias en las gráficas de CPU y memoria: escala de 0, 50 y 100 % a la izquierda y marcas de tiempo ("hace 60 s" / "ahora") debajo.
+
+### Cambiado
+- Las cantidades de memoria se muestran en unidades binarias (MiB/GiB), que corresponden a las conversiones entre 1024.
+- La lectura del sistema (CPU, memoria y procesos) se hace en un hilo en segundo plano; la interfaz solo dibuja y ya no se bloquea mientras se miden los datos.
+- El listado de los 8 procesos principales se calcula una vez por lectura, en lugar de ordenar todos los procesos en cada redibujado.
+
 ### Corregido
 - La tabla de procesos ahora ocupa todo el ancho de la ventana; la columna "Nombre" se estira y recorta los nombres largos con "…" (el nombre completo aparece al pasar el ratón).
 - Las barras de los núcleos se reparten en columnas según el ancho disponible en lugar de tener 180 px fijos.
