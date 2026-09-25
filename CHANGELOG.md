@@ -7,6 +7,9 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Sin publicar]
 
+### Corregido
+- El texto de las barras de núcleos, RAM y swap ahora se lee siempre: sobre la parte coloreada usa el color que más contrasta con ella (por ejemplo, texto oscuro sobre amarillo) y sobre el fondo mantiene el color normal.
+
 ## [0.2.0] - 2026-09-24
 
 ### Añadido

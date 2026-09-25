@@ -394,14 +394,73 @@ fn seccion(ui: &mut egui::Ui, contenido: impl FnOnce(&mut egui::Ui)) {
     });
 }
 
-/// Barra horizontal con texto encima.
+const TEXTO_OSCURO: Color32 = Color32::from_gray(20);
+const TEXTO_CLARO: Color32 = Color32::WHITE;
+
+/// Luminancia relativa de un color (fórmula WCAG).
+fn luminancia(c: Color32) -> f32 {
+    let canal = |v: u8| {
+        let v = v as f32 / 255.0;
+        if v <= 0.040_45 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * canal(c.r()) + 0.7152 * canal(c.g()) + 0.0722 * canal(c.b())
+}
+
+/// Relación de contraste WCAG entre dos colores (de 1 a 21).
+fn contraste(a: Color32, b: Color32) -> f32 {
+    let (la, lb) = (luminancia(a), luminancia(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+/// Texto oscuro o claro, el que más contraste tenga sobre `fondo`.
+fn color_texto_sobre(fondo: Color32) -> Color32 {
+    if contraste(fondo, TEXTO_OSCURO) >= contraste(fondo, TEXTO_CLARO) {
+        TEXTO_OSCURO
+    } else {
+        TEXTO_CLARO
+    }
+}
+
+/// Barra de carga de ancho `ancho` con el texto encima. El texto se dibuja dos veces,
+/// recortado: con color de contraste sobre el relleno y con el color normal sobre el fondo,
+/// para que siempre se lea aunque pase de una zona a otra.
+fn barra_carga(ui: &mut egui::Ui, ancho: f32, p: f32, texto: &str) {
+    const RADIO: f32 = 4.0;
+    let alto = ui.spacing().interact_size.y;
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(ancho, alto), Sense::hover());
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+
+    let painter = ui.painter();
+    let relleno_color = color_carga(p);
+    painter.rect_filled(rect, RADIO, ui.visuals().extreme_bg_color);
+    let x_corte = rect.left() + rect.width() * (p / 100.0).clamp(0.0, 1.0);
+    let relleno = Rect::from_min_max(rect.min, Pos2::new(x_corte, rect.bottom()));
+    let resto = Rect::from_min_max(Pos2::new(x_corte, rect.top()), rect.max);
+    if relleno.width() > 0.0 {
+        painter.rect_filled(relleno, RADIO, relleno_color);
+    }
+
+    let pos = Pos2::new(rect.left() + ui.spacing().item_spacing.x, rect.center().y);
+    let fuente = egui::TextStyle::Button.resolve(ui.style());
+    for (zona, color) in [
+        (relleno, color_texto_sobre(relleno_color)),
+        (resto, ui.visuals().text_color()),
+    ] {
+        painter
+            .with_clip_rect(zona)
+            .text(pos, Align2::LEFT_CENTER, texto, fuente.clone(), color);
+    }
+}
+
+/// Barra de carga que ocupa todo el ancho disponible.
 fn barra(ui: &mut egui::Ui, p: f32, texto: String) {
-    ui.add(
-        egui::ProgressBar::new(p / 100.0)
-            .text(texto)
-            .fill(color_carga(p))
-            .corner_radius(4.0),
-    );
+    barra_carga(ui, ui.available_width(), p, &texto);
 }
 
 impl Monitor {
@@ -479,12 +538,11 @@ impl Monitor {
                             .spacing([separacion, 4.0])
                             .show(ui, |ui| {
                                 for (i, &p) in m.nucleos.iter().enumerate() {
-                                    ui.add_sized(
-                                        [ancho_barra, 18.0],
-                                        egui::ProgressBar::new(p / 100.0)
-                                            .text(format!("Núcleo {i}: {p:.0} %"))
-                                            .fill(color_carga(p))
-                                            .corner_radius(4.0),
+                                    barra_carga(
+                                        ui,
+                                        ancho_barra,
+                                        p,
+                                        &format!("Núcleo {i}: {p:.0} %"),
                                     );
                                     if (i + 1) % columnas == 0 {
                                         ui.end_row();
@@ -705,6 +763,26 @@ mod tests {
     fn widget_nunca_sale_por_la_izquierda_en_pantallas_diminutas() {
         let pos = pos_inicial_widget(Some(Vec2::new(100.0, 100.0)), Vec2::new(240.0, 70.0));
         assert_eq!(pos.x, 0.0);
+    }
+
+    #[test]
+    fn texto_oscuro_sobre_amarillo_y_verde() {
+        assert_eq!(color_texto_sobre(color_carga(60.0)), TEXTO_OSCURO);
+        assert_eq!(color_texto_sobre(color_carga(10.0)), TEXTO_OSCURO);
+    }
+
+    #[test]
+    fn texto_claro_sobre_fondo_oscuro() {
+        assert_eq!(color_texto_sobre(Color32::from_gray(10)), TEXTO_CLARO);
+    }
+
+    #[test]
+    fn contraste_minimo_legible_en_los_tres_colores_de_carga() {
+        for p in [10.0, 60.0, 90.0] {
+            let fondo = color_carga(p);
+            let texto = color_texto_sobre(fondo);
+            assert!(contraste(fondo, texto) >= 4.5, "carga {p} %");
+        }
     }
 
     #[test]
