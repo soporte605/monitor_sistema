@@ -2,6 +2,9 @@
 
 use std::collections::HashSet;
 
+use listeners::{Protocol, SocketState};
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+
 /// Un puerto de desarrollo en escucha, listo para mostrar.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PuertoInfo {
@@ -97,6 +100,69 @@ pub fn coincide(p: &PuertoInfo, busqueda: &str) -> bool {
         || p.puerto.to_string().contains(&b)
         || p.nombre.to_lowercase().contains(&b)
         || p.comando.to_lowercase().contains(&b)
+}
+
+/// Resultado de una lectura de puertos: la lista o el mensaje de error.
+pub type ResultadoLectura = Result<Vec<PuertoInfo>, String>;
+
+/// Lee todos los sockets TCP en escucha y los completa con datos de `sysinfo`.
+pub fn leer_candidatos(sys: &mut System) -> Result<Vec<Candidato>, String> {
+    let sockets: Vec<listeners::Listener> = listeners::get_all()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|l| l.protocol == Protocol::TCP && l.state == SocketState::Listen)
+        .collect();
+
+    // Solo se refrescan los procesos implicados, y con los datos que hacen falta
+    let propio = sysinfo::get_current_pid().ok();
+    let mut pids: Vec<Pid> = sockets
+        .iter()
+        .map(|l| Pid::from_u32(l.process.pid))
+        .collect();
+    pids.extend(propio);
+    pids.sort();
+    pids.dedup();
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&pids),
+        false,
+        ProcessRefreshKind::nothing()
+            .with_user(UpdateKind::OnlyIfNotSet)
+            .with_cmd(UpdateKind::OnlyIfNotSet)
+            .with_exe(UpdateKind::OnlyIfNotSet),
+    );
+
+    let usuario = propio
+        .and_then(|p| sys.process(p))
+        .and_then(|p| p.user_id())
+        .cloned();
+
+    Ok(sockets
+        .iter()
+        .filter_map(|l| {
+            // Si el proceso terminó entre las dos lecturas, se omite
+            let proceso = sys.process(Pid::from_u32(l.process.pid))?;
+            let cmd: Vec<String> = proceso
+                .cmd()
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            Some(Candidato {
+                puerto: l.socket.port(),
+                pid: l.process.pid,
+                nombre: l.process.name.clone(),
+                ruta: l.process.path.clone(),
+                comando: comando_legible(&cmd, &l.process.path, &l.process.name),
+                inicio: proceso.start_time(),
+                es_del_usuario: usuario.is_some() && proceso.user_id() == usuario.as_ref(),
+            })
+        })
+        .collect())
+}
+
+/// Lista de puertos de desarrollo lista para mostrar.
+pub fn leer(sys: &mut System) -> ResultadoLectura {
+    let pid_propio = sysinfo::get_current_pid().map(|p| p.as_u32()).unwrap_or(0);
+    Ok(preparar(leer_candidatos(sys)?, pid_propio))
 }
 
 #[cfg(test)]
@@ -259,5 +325,25 @@ mod tests {
         assert!(coincide(p, "NODE"));
         assert!(coincide(p, "  ng serve  "));
         assert!(!coincide(p, "python"));
+    }
+
+    #[test]
+    fn la_lectura_encuentra_un_puerto_real_con_su_pid() {
+        let servidor = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let puerto = servidor.local_addr().unwrap().port();
+        let pid = std::process::id();
+
+        let mut sys = sysinfo::System::new();
+        let candidatos = leer_candidatos(&mut sys).unwrap();
+        let propio = candidatos
+            .iter()
+            .find(|c| c.puerto == puerto && c.pid == pid)
+            .expect("el puerto del test debería aparecer");
+        assert!(propio.es_del_usuario);
+        assert!(propio.inicio > 0);
+        assert!(!propio.comando.is_empty());
+
+        // `leer` aplica el filtro y excluye la propia app
+        assert!(leer(&mut sys).unwrap().iter().all(|p| p.pid != pid));
     }
 }
