@@ -1,6 +1,20 @@
 # Monitor del sistema (Rust + egui)
 
-Muestra en tiempo real: uso de CPU (gráfica + por núcleo), memoria RAM/swap y los procesos que más CPU consumen.
+**Español** | [English](README.en.md)
+
+Monitor de recursos de escritorio para **Windows, macOS y Linux**, escrito en Rust con egui. Consulta el uso de CPU, memoria y procesos en tiempo real, o mantenlo a la vista con su widget compacto flotante.
+
+**[Descargar la última versión](https://github.com/soporte605/monitor_sistema/releases/latest)** · [Cómo usarlo](#uso) · [Reportar un problema](https://github.com/soporte605/monitor_sistema/issues)
+
+## Características
+
+- CPU global y por núcleo, con historial gráfico del último minuto.
+- Memoria RAM y swap, con cantidades en MiB/GiB.
+- Los 8 procesos que más CPU consumen, con su PID y uso de memoria.
+- Modo compacto siempre visible con mini gráficas de CPU y RAM.
+- Ejecutables descargables para macOS (Apple Silicon e Intel), Windows y Linux (x86_64).
+
+La interfaz de la aplicación está en español.
 
 <p align="center">
   <img src="captura.png" width="454" alt="Ventana completa del Monitor del sistema: gráficas de CPU y RAM, núcleos y procesos">
