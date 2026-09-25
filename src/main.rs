@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Stroke, Vec2};
+use egui_extras::{Column, TableBuilder};
 use sysinfo::{ProcessesToUpdate, System};
 
 const HISTORIAL: usize = 120; // puntos en la gráfica (≈ 1 minuto a 500 ms)
@@ -104,6 +105,14 @@ fn grafica(ui: &mut egui::Ui, datos: &VecDeque<f32>, color: Color32) {
     painter.add(egui::Shape::line(puntos, Stroke::new(2.0, color)));
 }
 
+/// Recuadro de sección que ocupa todo el ancho disponible.
+fn seccion(ui: &mut egui::Ui, contenido: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        contenido(ui);
+    });
+}
+
 /// Barra horizontal con texto encima.
 fn barra(ui: &mut egui::Ui, p: f32, texto: String) {
     ui.add(
@@ -120,10 +129,11 @@ impl eframe::App for Monitor {
         let ctx = ui.ctx().clone();
 
         egui::CentralPanel::default().show(ui, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 // ── Encabezado ─────────────────────────────
                 ui.horizontal(|ui| {
                     ui.heading(RichText::new("Monitor del sistema").strong());
+                    ui.label(RichText::new(concat!("v", env!("CARGO_PKG_VERSION"))).weak());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let up = System::uptime();
                         ui.label(format!("Encendido: {}h {:02}m", up / 3600, (up % 3600) / 60));
@@ -139,7 +149,7 @@ impl eframe::App for Monitor {
 
                 // ── CPU ────────────────────────────────────
                 let cpu = self.sys.global_cpu_usage();
-                ui.group(|ui| {
+                seccion(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.strong("CPU");
                         ui.label(RichText::new(format!("{cpu:.1} %")).color(color_carga(cpu)).strong());
@@ -148,14 +158,21 @@ impl eframe::App for Monitor {
                     ui.add_space(6.0);
 
                     ui.label(format!("{} núcleos", self.sys.cpus().len()));
-                    egui::Grid::new("nucleos").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
+                    // Cuántas barras caben por fila según el ancho (mínimo 150 px cada una)
+                    let separacion = 8.0;
+                    let ancho = ui.available_width();
+                    let caben = ((ancho + separacion) / (150.0 + separacion)).floor().max(1.0) as usize;
+                    let columnas = caben.min(self.sys.cpus().len().max(1));
+                    let ancho_barra = (ancho - separacion * (columnas - 1) as f32) / columnas as f32;
+
+                    egui::Grid::new("nucleos").num_columns(columnas).spacing([separacion, 4.0]).show(ui, |ui| {
                         for (i, c) in self.sys.cpus().iter().enumerate() {
                             let p = c.cpu_usage();
-                            ui.add_sized([180.0, 18.0], egui::ProgressBar::new(p / 100.0)
+                            ui.add_sized([ancho_barra, 18.0], egui::ProgressBar::new(p / 100.0)
                                 .text(format!("Núcleo {i}: {p:.0} %"))
                                 .fill(color_carga(p))
                                 .corner_radius(4.0));
-                            if i % 2 == 1 {
+                            if (i + 1) % columnas == 0 {
                                 ui.end_row();
                             }
                         }
@@ -166,7 +183,7 @@ impl eframe::App for Monitor {
                 // ── Memoria ────────────────────────────────
                 let (usada, total) = (self.sys.used_memory(), self.sys.total_memory());
                 let p_ram = porcentaje(usada, total);
-                ui.group(|ui| {
+                seccion(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.strong("Memoria RAM");
                         ui.label(RichText::new(format!("{p_ram:.1} %")).color(color_carga(p_ram)).strong());
@@ -184,25 +201,49 @@ impl eframe::App for Monitor {
                 ui.add_space(8.0);
 
                 // ── Top procesos ───────────────────────────
-                ui.group(|ui| {
+                seccion(ui, |ui| {
                     ui.strong("Procesos que más CPU usan");
                     let mut procesos: Vec<_> = self.sys.processes().values().collect();
                     procesos.sort_by(|a, b| b.cpu_usage().total_cmp(&a.cpu_usage()));
 
-                    egui::Grid::new("procesos").striped(true).num_columns(4).spacing([16.0, 4.0]).show(ui, |ui| {
-                        ui.strong("PID");
-                        ui.strong("Nombre");
-                        ui.strong("CPU");
-                        ui.strong("Memoria");
-                        ui.end_row();
-                        for p in procesos.iter().take(8) {
-                            ui.label(p.pid().to_string());
-                            ui.label(p.name().to_string_lossy());
-                            ui.label(format!("{:.1} %", p.cpu_usage()));
-                            ui.label(format!("{:.0} MB", p.memory() as f64 / 1024.0 / 1024.0));
-                            ui.end_row();
-                        }
-                    });
+                    ui.add_space(4.0);
+
+                    // La columna "Nombre" toma el espacio sobrante y recorta con "…"
+                    let derecha = egui::Layout::right_to_left(egui::Align::Center);
+                    TableBuilder::new(ui)
+                        .striped(true)
+                        .vscroll(false)
+                        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                        .column(Column::exact(64.0))
+                        .column(Column::remainder().clip(true))
+                        .column(Column::exact(64.0))
+                        .column(Column::exact(80.0))
+                        .header(20.0, |mut fila| {
+                            fila.col(|ui| { ui.strong("PID"); });
+                            fila.col(|ui| { ui.strong("Nombre"); });
+                            fila.col(|ui| { ui.with_layout(derecha, |ui| ui.strong("CPU")); });
+                            fila.col(|ui| { ui.with_layout(derecha, |ui| ui.strong("Memoria")); });
+                        })
+                        .body(|mut cuerpo| {
+                            for p in procesos.iter().take(8) {
+                                cuerpo.row(20.0, |mut fila| {
+                                    fila.col(|ui| { ui.label(p.pid().to_string()); });
+                                    fila.col(|ui| {
+                                        let nombre = p.name().to_string_lossy();
+                                        ui.add(egui::Label::new(nombre.as_ref()).truncate())
+                                            .on_hover_text(nombre.as_ref());
+                                    });
+                                    fila.col(|ui| {
+                                        ui.with_layout(derecha, |ui| ui.label(format!("{:.1} %", p.cpu_usage())));
+                                    });
+                                    fila.col(|ui| {
+                                        ui.with_layout(derecha, |ui| {
+                                            ui.label(format!("{:.0} MB", p.memory() as f64 / 1024.0 / 1024.0))
+                                        });
+                                    });
+                                });
+                            }
+                        });
                 });
             });
         });
