@@ -8,6 +8,7 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 ## [Sin publicar]
 
 ### Añadido
+- Modo compacto: un icono de "imagen en imagen" en el encabezado (o ⌘⇧M / Ctrl+Shift+M) convierte la ventana en un widget pequeño y siempre visible con el uso de CPU y RAM y sus mini gráficas. Se mueve arrastrándolo y se vuelve a la ventana completa con doble clic, con el icono que aparece al pasar el ratón o con el mismo atajo.
 - Referencias en las gráficas de CPU y memoria: escala de 0, 50 y 100 % a la izquierda y marcas de tiempo ("hace 60 s" / "ahora") debajo.
 
 ### Cambiado
