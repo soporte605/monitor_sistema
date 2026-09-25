@@ -4,7 +4,7 @@
 // En Windows, que la versión release no abra una consola junto a la ventana
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
@@ -33,6 +33,8 @@ const MARGEN_WIDGET: f32 = 16.0; // separación del borde derecho de la pantalla
 const MARGEN_SUPERIOR_WIDGET: f32 = 48.0; // deja libre la barra de menús de macOS
 const COLOR_CPU: Color32 = Color32::from_rgb(33, 150, 243);
 const COLOR_RAM: Color32 = Color32::from_rgb(156, 39, 176);
+/// Rojo suave para acciones que terminan procesos.
+const COLOR_PELIGRO: Color32 = Color32::from_rgb(229, 115, 115);
 /// ⌘⇧M en macOS, Ctrl+Shift+M en Windows y Linux (⌘M ya es "minimizar" en macOS).
 const ATAJO_COMPACTO: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::M);
@@ -121,6 +123,28 @@ fn iniciar_lector(ctx: egui::Context, leer_puertos: Arc<AtomicBool>) -> Receiver
     rx
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Pestana {
+    Sistema,
+    Puertos,
+}
+
+/// Estado de una fila de puertos mientras se intenta terminar su proceso.
+#[allow(dead_code)] // Temporal: la tarea 6 conecta el cierre y lo quita
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EstadoCierre {
+    Cerrando,
+    NoResponde,
+}
+
+/// Petición de confirmación pendiente para terminar (o forzar) un proceso.
+#[allow(dead_code)] // Temporal: la tarea 6 conecta el cierre y lo quita
+#[derive(Clone)]
+struct Confirmacion {
+    puerto: puertos::PuertoInfo,
+    forzar: bool,
+}
+
 struct Monitor {
     rx: Receiver<Muestra>,
     actual: Option<Muestra>,
@@ -136,6 +160,11 @@ struct Monitor {
     leer_puertos: Arc<AtomicBool>,
     /// Última lectura de puertos (`None` hasta la primera).
     puertos: Option<puertos::ResultadoLectura>,
+    pestana: Pestana,
+    busqueda: String,
+    /// Filas con un cierre en marcha, por (puerto, PID).
+    en_curso: HashMap<(u16, u32), EstadoCierre>,
+    confirmacion: Option<Confirmacion>,
 }
 
 impl Monitor {
@@ -151,6 +180,10 @@ impl Monitor {
             pos_widget: None,
             leer_puertos,
             puertos: None,
+            pestana: Pestana::Sistema,
+            busqueda: String::new(),
+            en_curso: HashMap::new(),
+            confirmacion: None,
         }
     }
 
@@ -200,8 +233,12 @@ impl Monitor {
         }
     }
 
-    /// Guarda una lectura nueva de puertos.
+    /// Guarda una lectura nueva de puertos y olvida los cierres de filas que ya no existen.
     fn actualizar_puertos(&mut self, nuevos: puertos::ResultadoLectura) {
+        if let Ok(lista) = &nuevos {
+            self.en_curso
+                .retain(|clave, _| lista.iter().any(|p| (p.puerto, p.pid) == *clave));
+        }
         self.puertos = Some(nuevos);
     }
 }
@@ -505,15 +542,9 @@ fn barra(ui: &mut egui::Ui, p: f32, texto: String) {
 
 impl Monitor {
     /// Vista completa. Devuelve `true` si se pulsó el botón de modo compacto.
-    fn ui_completa(&self, ui: &mut egui::Ui) -> bool {
+    fn ui_completa(&mut self, ui: &mut egui::Ui) -> bool {
         let mut cambiar = false;
         egui::CentralPanel::default().show(ui, |ui| {
-            // Hasta que llegue la primera lectura
-            let Some(m) = &self.actual else {
-                ui.centered_and_justified(|ui| ui.spinner());
-                return;
-            };
-
             // Barra de desplazamiento sólida: reserva su hueco en lugar de dibujarse
             // encima del contenido (la flotante tapaba el borde derecho al pasar el ratón)
             ui.style_mut().spacing.scroll = egui::style::ScrollStyle::solid();
@@ -551,144 +582,301 @@ impl Monitor {
                     ));
                     ui.add_space(8.0);
 
-                    // ── CPU ────────────────────────────────────
-                    let cpu = m.cpu_global;
-                    seccion(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.strong("CPU");
-                            ui.label(
-                                RichText::new(format!("{cpu:.1} %"))
-                                    .color(color_carga(cpu))
-                                    .strong(),
-                            );
-                        });
-                        grafica(ui, &self.hist_cpu, COLOR_CPU);
-                        ui.add_space(6.0);
-
-                        ui.label(format!("{} núcleos", m.nucleos.len()));
-                        // Cuántas barras caben por fila según el ancho (mínimo 150 px cada una)
-                        let separacion = 8.0;
-                        let ancho = ui.available_width();
-                        let caben = ((ancho + separacion) / (150.0 + separacion))
-                            .floor()
-                            .max(1.0) as usize;
-                        let columnas = caben.min(m.nucleos.len().max(1));
-                        let ancho_barra =
-                            (ancho - separacion * (columnas - 1) as f32) / columnas as f32;
-
-                        egui::Grid::new("nucleos")
-                            .num_columns(columnas)
-                            .spacing([separacion, 4.0])
-                            .show(ui, |ui| {
-                                for (i, &p) in m.nucleos.iter().enumerate() {
-                                    barra_carga(
-                                        ui,
-                                        ancho_barra,
-                                        p,
-                                        &format!("Núcleo {i}: {p:.0} %"),
-                                    );
-                                    if (i + 1) % columnas == 0 {
-                                        ui.end_row();
-                                    }
-                                }
-                            });
+                    // ── Pestañas ───────────────────────────────
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(&mut self.pestana, Pestana::Sistema, "Sistema");
+                        let titulo = match &self.puertos {
+                            Some(Ok(lista)) => format!("Puertos · {}", lista.len()),
+                            _ => "Puertos".to_string(),
+                        };
+                        ui.selectable_value(&mut self.pestana, Pestana::Puertos, titulo);
                     });
                     ui.add_space(8.0);
 
-                    // ── Memoria ────────────────────────────────
-                    let p_ram = porcentaje(m.mem_usada, m.mem_total);
-                    seccion(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.strong("Memoria RAM");
-                            ui.label(
-                                RichText::new(format!("{p_ram:.1} %"))
-                                    .color(color_carga(p_ram))
-                                    .strong(),
-                            );
-                        });
-                        grafica(ui, &self.hist_ram, COLOR_RAM);
-                        ui.add_space(6.0);
-                        barra(
-                            ui,
-                            p_ram,
-                            format!(
-                                "{} de {}",
-                                formato_bytes(m.mem_usada),
-                                formato_bytes(m.mem_total)
-                            ),
-                        );
-
-                        if m.swap_total > 0 {
-                            let p = porcentaje(m.swap_usada, m.swap_total);
-                            barra(
-                                ui,
-                                p,
-                                format!(
-                                    "Swap: {} de {}",
-                                    formato_bytes(m.swap_usada),
-                                    formato_bytes(m.swap_total)
-                                ),
-                            );
-                        }
-                    });
-                    ui.add_space(8.0);
-
-                    // ── Top procesos ───────────────────────────
-                    seccion(ui, |ui| {
-                        ui.strong("Procesos que más CPU usan");
-                        ui.add_space(4.0);
-
-                        // La columna "Nombre" toma el espacio sobrante y recorta con "…"
-                        let derecha = egui::Layout::right_to_left(egui::Align::Center);
-                        TableBuilder::new(ui)
-                            .striped(true)
-                            .vscroll(false)
-                            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                            .column(Column::exact(64.0))
-                            .column(Column::remainder().clip(true))
-                            .column(Column::exact(64.0))
-                            .column(Column::exact(80.0))
-                            .header(20.0, |mut fila| {
-                                fila.col(|ui| {
-                                    ui.strong("PID");
-                                });
-                                fila.col(|ui| {
-                                    ui.strong("Nombre");
-                                });
-                                fila.col(|ui| {
-                                    ui.with_layout(derecha, |ui| ui.strong("CPU"));
-                                });
-                                fila.col(|ui| {
-                                    ui.with_layout(derecha, |ui| ui.strong("Memoria"));
-                                });
-                            })
-                            .body(|mut cuerpo| {
-                                for p in &m.procesos {
-                                    cuerpo.row(20.0, |mut fila| {
-                                        fila.col(|ui| {
-                                            ui.label(p.pid.to_string());
-                                        });
-                                        fila.col(|ui| {
-                                            ui.add(egui::Label::new(&p.nombre).truncate())
-                                                .on_hover_text(&p.nombre);
-                                        });
-                                        fila.col(|ui| {
-                                            ui.with_layout(derecha, |ui| {
-                                                ui.label(format!("{:.1} %", p.cpu))
-                                            });
-                                        });
-                                        fila.col(|ui| {
-                                            ui.with_layout(derecha, |ui| {
-                                                ui.label(formato_bytes(p.memoria))
-                                            });
-                                        });
-                                    });
-                                }
-                            });
-                    });
+                    match self.pestana {
+                        Pestana::Sistema => self.vista_sistema(ui),
+                        Pestana::Puertos => self.vista_puertos(ui),
+                    }
                 });
         });
         cambiar
+    }
+
+    /// Pestaña «Sistema»: CPU, memoria y procesos (la vista de siempre).
+    fn vista_sistema(&self, ui: &mut egui::Ui) {
+        // Hasta que llegue la primera lectura
+        let Some(m) = &self.actual else {
+            ui.centered_and_justified(|ui| ui.spinner());
+            return;
+        };
+
+        // ── CPU ────────────────────────────────────
+        let cpu = m.cpu_global;
+        seccion(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.strong("CPU");
+                ui.label(
+                    RichText::new(format!("{cpu:.1} %"))
+                        .color(color_carga(cpu))
+                        .strong(),
+                );
+            });
+            grafica(ui, &self.hist_cpu, COLOR_CPU);
+            ui.add_space(6.0);
+
+            ui.label(format!("{} núcleos", m.nucleos.len()));
+            // Cuántas barras caben por fila según el ancho (mínimo 150 px cada una)
+            let separacion = 8.0;
+            let ancho = ui.available_width();
+            let caben = ((ancho + separacion) / (150.0 + separacion))
+                .floor()
+                .max(1.0) as usize;
+            let columnas = caben.min(m.nucleos.len().max(1));
+            let ancho_barra = (ancho - separacion * (columnas - 1) as f32) / columnas as f32;
+
+            egui::Grid::new("nucleos")
+                .num_columns(columnas)
+                .spacing([separacion, 4.0])
+                .show(ui, |ui| {
+                    for (i, &p) in m.nucleos.iter().enumerate() {
+                        barra_carga(ui, ancho_barra, p, &format!("Núcleo {i}: {p:.0} %"));
+                        if (i + 1) % columnas == 0 {
+                            ui.end_row();
+                        }
+                    }
+                });
+        });
+        ui.add_space(8.0);
+
+        // ── Memoria ────────────────────────────────
+        let p_ram = porcentaje(m.mem_usada, m.mem_total);
+        seccion(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.strong("Memoria RAM");
+                ui.label(
+                    RichText::new(format!("{p_ram:.1} %"))
+                        .color(color_carga(p_ram))
+                        .strong(),
+                );
+            });
+            grafica(ui, &self.hist_ram, COLOR_RAM);
+            ui.add_space(6.0);
+            barra(
+                ui,
+                p_ram,
+                format!(
+                    "{} de {}",
+                    formato_bytes(m.mem_usada),
+                    formato_bytes(m.mem_total)
+                ),
+            );
+
+            if m.swap_total > 0 {
+                let p = porcentaje(m.swap_usada, m.swap_total);
+                barra(
+                    ui,
+                    p,
+                    format!(
+                        "Swap: {} de {}",
+                        formato_bytes(m.swap_usada),
+                        formato_bytes(m.swap_total)
+                    ),
+                );
+            }
+        });
+        ui.add_space(8.0);
+
+        // ── Top procesos ───────────────────────────
+        seccion(ui, |ui| {
+            ui.strong("Procesos que más CPU usan");
+            ui.add_space(4.0);
+
+            // La columna "Nombre" toma el espacio sobrante y recorta con "…"
+            let derecha = egui::Layout::right_to_left(egui::Align::Center);
+            TableBuilder::new(ui)
+                .striped(true)
+                .vscroll(false)
+                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                .column(Column::exact(64.0))
+                .column(Column::remainder().clip(true))
+                .column(Column::exact(64.0))
+                .column(Column::exact(80.0))
+                .header(20.0, |mut fila| {
+                    fila.col(|ui| {
+                        ui.strong("PID");
+                    });
+                    fila.col(|ui| {
+                        ui.strong("Nombre");
+                    });
+                    fila.col(|ui| {
+                        ui.with_layout(derecha, |ui| ui.strong("CPU"));
+                    });
+                    fila.col(|ui| {
+                        ui.with_layout(derecha, |ui| ui.strong("Memoria"));
+                    });
+                })
+                .body(|mut cuerpo| {
+                    for p in &m.procesos {
+                        cuerpo.row(20.0, |mut fila| {
+                            fila.col(|ui| {
+                                ui.label(p.pid.to_string());
+                            });
+                            fila.col(|ui| {
+                                ui.add(egui::Label::new(&p.nombre).truncate())
+                                    .on_hover_text(&p.nombre);
+                            });
+                            fila.col(|ui| {
+                                ui.with_layout(derecha, |ui| ui.label(format!("{:.1} %", p.cpu)));
+                            });
+                            fila.col(|ui| {
+                                ui.with_layout(derecha, |ui| ui.label(formato_bytes(p.memoria)));
+                            });
+                        });
+                    }
+                });
+        });
+    }
+
+    /// Pestaña «Puertos»: buscador y tabla de puertos de desarrollo.
+    fn vista_puertos(&mut self, ui: &mut egui::Ui) {
+        ui.add(
+            egui::TextEdit::singleline(&mut self.busqueda)
+                .hint_text("🔍 Buscar puerto o proceso…")
+                .desired_width(f32::INFINITY),
+        );
+        ui.add_space(6.0);
+
+        let lista = match &self.puertos {
+            None => {
+                ui.spinner();
+                return;
+            }
+            Some(Err(e)) => {
+                ui.colored_label(
+                    COLOR_PELIGRO,
+                    format!("No se pudieron leer los puertos: {e}"),
+                );
+                return;
+            }
+            Some(Ok(lista)) => lista,
+        };
+        if lista.is_empty() {
+            ui.label("No hay puertos de desarrollo en uso.");
+            ui.label(
+                RichText::new(
+                    "¿No ves tu puerto? Puede estar ocupado por un servicio del sistema o de otro usuario.",
+                )
+                .weak(),
+            );
+            return;
+        }
+        let visibles: Vec<&puertos::PuertoInfo> = lista
+            .iter()
+            .filter(|p| puertos::coincide(p, &self.busqueda))
+            .collect();
+        if visibles.is_empty() {
+            ui.label(format!(
+                "Ningún puerto coincide con «{}».",
+                self.busqueda.trim()
+            ));
+            return;
+        }
+
+        let mut pedir: Option<Confirmacion> = None;
+        TableBuilder::new(ui)
+            .striped(true)
+            .vscroll(false)
+            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+            .column(Column::exact(56.0))
+            .column(Column::remainder().clip(true))
+            .column(Column::exact(104.0))
+            .header(20.0, |mut fila| {
+                fila.col(|ui| {
+                    ui.strong("Puerto");
+                });
+                fila.col(|ui| {
+                    ui.strong("Proceso");
+                });
+                fila.col(|ui| {
+                    ui.strong("Acción");
+                });
+            })
+            .body(|mut cuerpo| {
+                for p in &visibles {
+                    cuerpo.row(40.0, |mut fila| {
+                        fila.col(|ui| {
+                            ui.label(RichText::new(p.puerto.to_string()).strong().size(16.0));
+                        });
+                        fila.col(|ui| {
+                            ui.vertical(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.add(
+                                        egui::Label::new(RichText::new(&p.nombre).strong())
+                                            .truncate(),
+                                    );
+                                    if p.es_dev {
+                                        ui.label(
+                                            RichText::new(" dev ")
+                                                .small()
+                                                .color(TEXTO_OSCURO)
+                                                .background_color(COLOR_CPU),
+                                        );
+                                    }
+                                });
+                                ui.add(
+                                    egui::Label::new(RichText::new(&p.comando).small().weak())
+                                        .truncate(),
+                                )
+                                .on_hover_text(format!("{}\nPID {}", p.comando, p.pid));
+                            });
+                        });
+                        fila.col(|ui| match self.en_curso.get(&(p.puerto, p.pid)) {
+                            Some(EstadoCierre::Cerrando) => {
+                                ui.spinner();
+                                ui.label("Cerrando…");
+                            }
+                            Some(EstadoCierre::NoResponde) => {
+                                ui.vertical(|ui| {
+                                    ui.label(RichText::new("No responde").small().weak());
+                                    if ui
+                                        .button(RichText::new("Forzar cierre").color(COLOR_PELIGRO))
+                                        .clicked()
+                                    {
+                                        pedir = Some(Confirmacion {
+                                            puerto: (*p).clone(),
+                                            forzar: true,
+                                        });
+                                    }
+                                });
+                            }
+                            None => {
+                                if ui
+                                    .button(RichText::new("Terminar").color(COLOR_PELIGRO))
+                                    .clicked()
+                                {
+                                    pedir = Some(Confirmacion {
+                                        puerto: (*p).clone(),
+                                        forzar: false,
+                                    });
+                                }
+                            }
+                        });
+                    });
+                }
+            });
+        if pedir.is_some() {
+            self.confirmacion = pedir;
+        }
+
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(format!(
+                "Se actualiza cada {} s",
+                puertos::INTERVALO_PUERTOS.as_secs()
+            ))
+            .small()
+            .weak(),
+        );
     }
 
     /// Widget compacto: CPU y RAM con mini gráficas, sin barra de título y siempre encima.
