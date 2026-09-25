@@ -2,7 +2,9 @@
 
 Muestra en tiempo real: uso de CPU (gráfica + por núcleo), memoria RAM/swap y los procesos que más CPU consumen.
 
-![Captura](captura.png)
+<p align="center">
+  <img src="captura.png" width="454" alt="Ventana completa del Monitor del sistema: gráficas de CPU y RAM, núcleos y procesos">
+</p>
 
 ## Descargar
 
@@ -28,6 +30,10 @@ Muestra el uso de CPU global con su gráfica del último minuto, las barras de c
 
 ### Modo compacto
 Un widget pequeño, sin barra de título y **siempre visible** encima de las demás ventanas, con el uso de CPU y RAM y sus mini gráficas.
+
+<p align="center">
+  <img src="captura-compacto.png" width="248" alt="Widget compacto con el uso de CPU y RAM y sus mini gráficas">
+</p>
 
 | Acción | Cómo |
 |---|---|
