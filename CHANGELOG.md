@@ -7,6 +7,8 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Sin publicar]
 
+## [0.2.2] - 2026-09-25
+
 ### Añadido
 - README en inglés, con selector de idioma, resumen de características y acceso destacado a las descargas en ambas versiones.
 
@@ -48,7 +50,8 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 - Tabla con los 8 procesos que más CPU consumen (PID, nombre, CPU y memoria).
 - Encabezado con nombre del equipo, sistema operativo, tiempo encendido y versión de la app.
 
-[Sin publicar]: https://github.com/soporte605/monitor_sistema/compare/v0.2.1...develop
+[Sin publicar]: https://github.com/soporte605/monitor_sistema/compare/v0.2.2...develop
+[0.2.2]: https://github.com/soporte605/monitor_sistema/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/soporte605/monitor_sistema/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/soporte605/monitor_sistema/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/soporte605/monitor_sistema/releases/tag/v0.1.0
