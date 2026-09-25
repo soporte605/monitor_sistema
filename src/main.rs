@@ -474,6 +474,9 @@ impl Monitor {
                 return;
             };
 
+            // Barra de desplazamiento sólida: reserva su hueco en lugar de dibujarse
+            // encima del contenido (la flotante tapaba el borde derecho al pasar el ratón)
+            ui.style_mut().spacing.scroll = egui::style::ScrollStyle::solid();
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
