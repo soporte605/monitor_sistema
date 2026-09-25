@@ -7,6 +7,9 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Sin publicar]
 
+### Añadido
+- Pestaña «Puertos»: lista los puertos TCP de desarrollo en escucha (de tu usuario, 1024 o mayores y fuera de las carpetas del sistema) con el proceso que ocupa cada uno, su línea de comandos y la etiqueta [dev] para herramientas conocidas. Tiene buscador y permite terminar el proceso con confirmación: primero se le pide que se cierre y, si no responde en 3 segundos, se puede forzar.
+
 ## [0.2.2] - 2026-09-25
 
 ### Añadido
