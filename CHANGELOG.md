@@ -8,10 +8,13 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 ## [Sin publicar]
 
 ### Añadido
+- Versiones descargables para macOS (universal), Windows y Linux en las Releases de GitHub, generadas automáticamente al publicar cada versión.
+- Licencia MIT.
 - Modo compacto: un icono de "imagen en imagen" en el encabezado (o ⌘⇧M / Ctrl+Shift+M) convierte la ventana en un widget pequeño y siempre visible con el uso de CPU y RAM y sus mini gráficas. Se mueve arrastrándolo y se vuelve a la ventana completa con doble clic, con el icono que aparece al pasar el ratón o con el mismo atajo.
 - Referencias en las gráficas de CPU y memoria: escala de 0, 50 y 100 % a la izquierda y marcas de tiempo ("hace 60 s" / "ahora") debajo.
 
 ### Cambiado
+- En Windows ya no se abre una ventana de consola junto a la app.
 - Las cantidades de memoria se muestran en unidades binarias (MiB/GiB), que corresponden a las conversiones entre 1024.
 - La lectura del sistema (CPU, memoria y procesos) se hace en un hilo en segundo plano; la interfaz solo dibuja y ya no se bloquea mientras se miden los datos.
 - El listado de los 8 procesos principales se calcula una vez por lectura, en lugar de ordenar todos los procesos en cada redibujado.

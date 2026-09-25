@@ -1,0 +1,121 @@
+# Compila la app para macOS, Windows y Linux al subir un tag vX.Y.Z
+# y publica los archivos en una Release de GitHub.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  APP: monitor_sistema
+
+jobs:
+  macos:
+    name: macOS (universal)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar Rust con los dos objetivos de Mac
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: Compilar
+        run: |
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+      - name: Crear la .app universal (Apple Silicon + Intel)
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          APPDIR="Monitor del sistema.app"
+          mkdir -p "$APPDIR/Contents/MacOS"
+          lipo -create -output "$APPDIR/Contents/MacOS/$APP" \
+            "target/aarch64-apple-darwin/release/$APP" \
+            "target/x86_64-apple-darwin/release/$APP"
+          cat > "$APPDIR/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>Monitor del sistema</string>
+            <key>CFBundleDisplayName</key><string>Monitor del sistema</string>
+            <key>CFBundleIdentifier</key><string>io.github.soporte605.monitor-sistema</string>
+            <key>CFBundleExecutable</key><string>$APP</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>$VERSION</string>
+            <key>CFBundleVersion</key><string>$VERSION</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          PLIST
+          # Firma ad hoc: sin ella macOS no abre el binario universal en Apple Silicon
+          codesign --force --deep --sign - "$APPDIR"
+          ditto -c -k --keepParent "$APPDIR" "$APP-$GITHUB_REF_NAME-macos.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: "*.zip"
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compilar
+        run: cargo build --release --locked
+      - name: Empaquetar
+        shell: pwsh
+        run: Compress-Archive -Path "target/release/$env:APP.exe", LICENSE, README.md -DestinationPath "$env:APP-$env:GITHUB_REF_NAME-windows.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: "*.zip"
+
+  linux:
+    name: Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar dependencias de sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+      - name: Compilar
+        run: cargo build --release --locked
+      - name: Empaquetar
+        run: tar -czf "$APP-$GITHUB_REF_NAME-linux-x86_64.tar.gz" -C target/release "$APP" -C "$GITHUB_WORKSPACE" LICENSE README.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: "*.tar.gz"
+
+  publicar:
+    name: Publicar la Release
+    needs: [macos, windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Notas de la versión desde el CHANGELOG
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" { dentro = 1; next }
+            dentro && /^## \[/ { exit }
+            dentro && /^\[.*\]: / { exit }
+            dentro { print }
+          ' CHANGELOG.md > notas.md
+          cat >> notas.md <<'NOTAS'
+
+          ---
+          **Primera vez que la abres:** la app no está firmada por Apple ni por Microsoft, así que el sistema avisará. Mira la sección [Descargar](https://github.com/soporte605/monitor_sistema#descargar) del README.
+          NOTAS
+      - name: Crear la Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes-file notas.md

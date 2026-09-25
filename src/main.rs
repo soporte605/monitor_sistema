@@ -1,6 +1,9 @@
 // Monitor del sistema en Rust
 // GUI: eframe/egui  ·  Datos del sistema: sysinfo
 
+// En Windows, que la versión release no abra una consola junto a la ventana
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use std::collections::VecDeque;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;

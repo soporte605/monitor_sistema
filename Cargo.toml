@@ -3,6 +3,11 @@ name = "monitor_sistema"
 version = "0.1.0"
 edition = "2024"
 description = "Monitor del sistema con interfaz gráfica (CPU, memoria y procesos)"
+license = "MIT"
+repository = "https://github.com/soporte605/monitor_sistema"
+readme = "README.md"
+keywords = ["monitor", "sistema", "cpu", "memoria", "egui"]
+categories = ["gui", "os"]
 
 [dependencies]
 eframe = "0.36.2"
