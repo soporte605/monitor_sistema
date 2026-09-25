@@ -1,9 +1,13 @@
 //! Pestaña «Puertos»: qué proceso ocupa cada puerto de desarrollo y cómo terminarlo.
 
 use std::collections::HashSet;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use listeners::{Protocol, SocketState};
-use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+use sysinfo::{
+    Pid, ProcessRefreshKind, ProcessStatus, ProcessesToUpdate, Signal, System, UpdateKind,
+};
 
 /// Un puerto de desarrollo en escucha, listo para mostrar.
 #[derive(Debug, Clone, PartialEq)]
@@ -163,6 +167,85 @@ pub fn leer_candidatos(sys: &mut System) -> Result<Vec<Candidato>, String> {
 pub fn leer(sys: &mut System) -> ResultadoLectura {
     let pid_propio = sysinfo::get_current_pid().map(|p| p.as_u32()).unwrap_or(0);
     Ok(preparar(leer_candidatos(sys)?, pid_propio))
+}
+
+/// Cuánto se espera a que un proceso se cierre tras pedírselo.
+pub const ESPERA_CIERRE: Duration = Duration::from_secs(3);
+
+/// Qué pasó al intentar terminar un proceso.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResultadoCierre {
+    /// El proceso terminó.
+    Cerrado,
+    /// Ya no existía antes de actuar.
+    YaTerminado,
+    /// Sigue vivo tras la espera.
+    NoResponde,
+    /// El sistema no dejó enviarle la señal.
+    SinPermiso,
+    /// El PID ahora es de otro proceso: no se tocó.
+    Cambio,
+}
+
+fn refrescar(sys: &mut System, pid: Pid) {
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        true,
+        ProcessRefreshKind::nothing(),
+    );
+}
+
+/// El proceso de `p` sigue vivo (mismo PID y misma hora de inicio, y no es un zombi).
+fn esta_vivo(sys: &mut System, p: &PuertoInfo) -> bool {
+    let pid = Pid::from_u32(p.pid);
+    refrescar(sys, pid);
+    sys.process(pid).is_some_and(|proceso| {
+        proceso.start_time() == p.inicio && proceso.status() != ProcessStatus::Zombie
+    })
+}
+
+/// Termina el proceso que ocupa el puerto. Primero comprueba que el PID sigue siendo
+/// el mismo proceso. Sin `forzar` envía SIGTERM (en Windows, donde no existe, cierra
+/// directamente); con `forzar`, SIGKILL. Después espera hasta `ESPERA_CIERRE`.
+/// Bloquea: debe llamarse desde un hilo aparte.
+pub fn terminar(p: &PuertoInfo, forzar: bool) -> ResultadoCierre {
+    let pid = Pid::from_u32(p.pid);
+    let mut sys = System::new();
+    refrescar(&mut sys, pid);
+
+    let Some(proceso) = sys.process(pid) else {
+        return ResultadoCierre::YaTerminado;
+    };
+    if proceso.start_time() != p.inicio {
+        return ResultadoCierre::Cambio;
+    }
+    if proceso.status() == ProcessStatus::Zombie {
+        return ResultadoCierre::YaTerminado;
+    }
+
+    let enviada = if forzar {
+        proceso.kill()
+    } else {
+        proceso
+            .kill_with(Signal::Term)
+            .unwrap_or_else(|| proceso.kill())
+    };
+    if !enviada {
+        return if esta_vivo(&mut sys, p) {
+            ResultadoCierre::SinPermiso
+        } else {
+            ResultadoCierre::YaTerminado
+        };
+    }
+
+    let limite = Instant::now() + ESPERA_CIERRE;
+    while Instant::now() < limite {
+        if !esta_vivo(&mut sys, p) {
+            return ResultadoCierre::Cerrado;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    ResultadoCierre::NoResponde
 }
 
 #[cfg(test)]
@@ -345,5 +428,93 @@ mod tests {
 
         // `leer` aplica el filtro y excluye la propia app
         assert!(leer(&mut sys).unwrap().iter().all(|p| p.pid != pid));
+    }
+
+    use std::io::{BufRead, BufReader};
+    use std::process::{Child, Command, Stdio};
+
+    const VAR_SERVIDOR: &str = "MONITOR_SERVIDOR_AUXILIAR";
+
+    /// No es un test real: es el «modo servidor» del ejecutable de tests.
+    /// Solo actúa si lo lanza `lanzar_servidor` con la variable de entorno.
+    #[test]
+    #[ignore]
+    fn servidor_auxiliar() {
+        if std::env::var(VAR_SERVIDOR).is_err() {
+            return;
+        }
+        let servidor = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        println!("PUERTO={}", servidor.local_addr().unwrap().port());
+        std::thread::sleep(std::time::Duration::from_secs(60));
+    }
+
+    /// Lanza el propio ejecutable de tests como proceso hijo que escucha en un puerto.
+    fn lanzar_servidor() -> (Child, u16) {
+        let mut hijo = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "puertos::tests::servidor_auxiliar",
+                "--exact",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env(VAR_SERVIDOR, "1")
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let salida = BufReader::new(hijo.stdout.take().unwrap());
+        let puerto = salida
+            .lines()
+            .map_while(Result::ok)
+            .find_map(|l| l.strip_prefix("PUERTO=").map(|p| p.parse().unwrap()))
+            .expect("el servidor auxiliar no indicó su puerto");
+        (hijo, puerto)
+    }
+
+    fn info_del_hijo(hijo: &Child, puerto: u16) -> PuertoInfo {
+        let mut sys = sysinfo::System::new();
+        leer(&mut sys)
+            .unwrap()
+            .into_iter()
+            .find(|p| p.pid == hijo.id() && p.puerto == puerto)
+            .expect("el servidor auxiliar debería aparecer en la lista")
+    }
+
+    fn puerto_libre(puerto: u16) -> bool {
+        std::net::TcpListener::bind(("127.0.0.1", puerto)).is_ok()
+    }
+
+    #[test]
+    fn terminar_libera_el_puerto() {
+        let (mut hijo, puerto) = lanzar_servidor();
+        let info = info_del_hijo(&hijo, puerto);
+
+        assert_eq!(terminar(&info, false), ResultadoCierre::Cerrado);
+        hijo.wait().unwrap();
+        assert!(puerto_libre(puerto));
+    }
+
+    #[test]
+    fn proceso_que_ya_termino() {
+        let (mut hijo, puerto) = lanzar_servidor();
+        let info = info_del_hijo(&hijo, puerto);
+        hijo.kill().unwrap();
+        hijo.wait().unwrap();
+
+        assert_eq!(terminar(&info, false), ResultadoCierre::YaTerminado);
+    }
+
+    #[test]
+    fn pid_reutilizado_no_se_toca() {
+        let (mut hijo, puerto) = lanzar_servidor();
+        let mut info = info_del_hijo(&hijo, puerto);
+        info.inicio += 1; // simula otro proceso con el mismo PID
+
+        assert_eq!(terminar(&info, false), ResultadoCierre::Cambio);
+        assert!(
+            hijo.try_wait().unwrap().is_none(),
+            "el proceso debe seguir vivo"
+        );
+        hijo.kill().unwrap();
+        hijo.wait().unwrap();
     }
 }
