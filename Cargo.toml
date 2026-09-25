@@ -1,6 +1,6 @@
 [package]
 name = "monitor_sistema"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 description = "Monitor del sistema con interfaz gráfica (CPU, memoria y procesos)"
 license = "MIT"
