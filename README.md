@@ -12,6 +12,7 @@ Monitor de recursos de escritorio para **Windows, macOS y Linux**, escrito en Ru
 - Memoria RAM y swap, con cantidades en MiB/GiB.
 - Los 8 procesos que más CPU consumen, con su PID y uso de memoria.
 - Modo compacto siempre visible con mini gráficas de CPU y RAM.
+- Pestaña de puertos para desarrolladores: qué proceso ocupa cada puerto (por ejemplo, el 4200 de Angular) y terminarlo con un clic.
 - Ejecutables descargables para macOS (Apple Silicon e Intel), Windows y Linux (x86_64).
 
 La interfaz de la aplicación está en español.
@@ -58,6 +59,14 @@ Un widget pequeño, sin barra de título y **siempre visible** encima de las dem
 La ventana vuelve con su tamaño y posición anteriores, y el widget recuerda dónde lo dejaste mientras la app siga abierta.
 
 > En Linux con Wayland, algunos gestores de ventanas ignoran la opción "siempre visible".
+
+### Puertos
+La pestaña **Puertos** muestra qué proceso ocupa cada puerto de desarrollo, por ejemplo el 4200 de un `ng serve` que no se cerró bien, y permite terminarlo.
+
+- Solo aparecen puertos TCP en escucha de **tu usuario**, del **1024 en adelante** y de programas que **no son del sistema**. Los servicios del sistema, como AirPlay en el 5000, no se muestran.
+- Cada fila enseña el puerto, el proceso (con la etiqueta **[dev]** si es `node`, `python`, `java`…) y su línea de comandos. Pasa el ratón por encima para verla completa con el PID.
+- El buscador filtra por número de puerto, nombre o comando.
+- **Terminar** pide confirmación y después solicita al proceso que se cierre. Si no responde en 3 segundos, aparece **Forzar cierre**. En Windows el cierre es inmediato.
 
 ## Compilar desde el código
 1. Instala Rust: https://rustup.rs

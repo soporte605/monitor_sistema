@@ -12,6 +12,7 @@ A desktop resource monitor for **Windows, macOS and Linux**, built with Rust and
 - RAM and swap usage, with memory sizes in MiB/GiB.
 - Top 8 processes by CPU usage, including PID and memory usage.
 - An always-on-top compact widget with CPU and RAM mini charts.
+- A Ports tab for developers: see which process holds each port (such as Angular's 4200) and terminate it in one click.
 - Downloads for macOS (Apple Silicon and Intel), Windows and Linux (x86_64).
 
 The application interface is currently in Spanish.
@@ -59,6 +60,15 @@ A small, borderless, always-on-top widget shows CPU and RAM usage with mini char
 The full window returns to its previous size and position. The widget remembers its position while the app remains open.
 
 Some Linux window managers running Wayland may ignore the always-on-top setting.
+
+### Ports
+
+The **Ports** tab shows which process is holding each development port, such as port 4200 from an `ng serve` that did not shut down cleanly, and lets you terminate it.
+
+- Only listening TCP ports owned by **your user**, numbered **1024 or higher** and opened by **non-system programs** are listed. System services, such as AirPlay on port 5000, are hidden.
+- Each row shows the port, the process (tagged **[dev]** for `node`, `python`, `java` and similar tools) and its command line. Hover over it to see the full command and the PID.
+- The search box filters by port number, process name or command.
+- **Terminar** (Terminate) asks for confirmation and then requests the process to exit. If it does not respond within 3 seconds, **Forzar cierre** (Force quit) appears. On Windows the process is terminated immediately.
 
 ## Build from source
 

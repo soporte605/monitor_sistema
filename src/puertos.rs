@@ -1,0 +1,624 @@
+//! Pestaña «Puertos»: qué proceso ocupa cada puerto de desarrollo y cómo terminarlo.
+
+use std::collections::HashSet;
+use std::thread;
+use std::time::{Duration, Instant};
+
+use listeners::{Protocol, SocketState};
+use sysinfo::{
+    Pid, ProcessRefreshKind, ProcessStatus, ProcessesToUpdate, Signal, System, UpdateKind,
+};
+
+/// Un puerto de desarrollo en escucha, listo para mostrar.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PuertoInfo {
+    pub puerto: u16,
+    pub pid: u32,
+    pub nombre: String,
+    /// Línea de comandos (o la ruta o el nombre si el sistema no la da).
+    pub comando: String,
+    /// Hora de inicio del proceso, para no confundirlo con otro que reutilice el PID.
+    pub inicio: u64,
+    /// Es una herramienta de desarrollo conocida (solo informativo).
+    pub es_dev: bool,
+}
+
+/// Un socket en escucha antes de filtrar, con los datos necesarios para decidir.
+#[derive(Debug, Clone)]
+pub struct Candidato {
+    pub puerto: u16,
+    pub pid: u32,
+    pub nombre: String,
+    pub ruta: String,
+    pub comando: String,
+    pub inicio: u64,
+    pub es_del_usuario: bool,
+}
+
+/// Carpetas de programas del sistema (macOS, Linux y Windows), en minúsculas.
+const CARPETAS_DEL_SISTEMA: &[&str] = &[
+    "/system/",
+    "/usr/libexec/",
+    "/usr/sbin/",
+    "/usr/lib/systemd/",
+    r"c:\windows\",
+];
+
+/// Herramientas de desarrollo conocidas (nombre sin extensión, en minúsculas).
+const HERRAMIENTAS_DEV: &[&str] = &["node", "deno", "bun", "java", "dotnet", "ruby", "php", "go"];
+
+/// El ejecutable está en una carpeta del sistema.
+pub fn en_carpeta_del_sistema(ruta: &str) -> bool {
+    let ruta = ruta.to_lowercase();
+    CARPETAS_DEL_SISTEMA.iter().any(|c| ruta.starts_with(c))
+}
+
+/// Un puerto cuenta como «de desarrollo» si el proceso es del usuario,
+/// el puerto no es privilegiado y el ejecutable no es del sistema.
+pub fn es_de_desarrollo(c: &Candidato) -> bool {
+    c.es_del_usuario && c.puerto >= 1024 && !en_carpeta_del_sistema(&c.ruta)
+}
+
+/// Reconoce herramientas de desarrollo por su nombre (`node`, `node.exe`, `python3.12`…).
+pub fn es_herramienta_dev(nombre: &str) -> bool {
+    let nombre = nombre.to_lowercase();
+    let base = nombre.strip_suffix(".exe").unwrap_or(&nombre);
+    base.starts_with("python") || HERRAMIENTAS_DEV.contains(&base)
+}
+
+/// Texto para identificar el proceso: su línea de comandos o, si no hay, la ruta o el nombre.
+pub fn comando_legible(cmd: &[String], ruta: &str, nombre: &str) -> String {
+    if !cmd.is_empty() {
+        cmd.join(" ")
+    } else if !ruta.is_empty() {
+        ruta.to_string()
+    } else {
+        nombre.to_string()
+    }
+}
+
+/// Filtra, une IPv4/IPv6 (mismo puerto y PID), excluye la propia app y ordena por puerto.
+pub fn preparar(candidatos: Vec<Candidato>, pid_propio: u32) -> Vec<PuertoInfo> {
+    let mut vistos = HashSet::new();
+    let mut lista: Vec<PuertoInfo> = candidatos
+        .into_iter()
+        .filter(|c| c.pid != pid_propio && es_de_desarrollo(c))
+        .filter(|c| vistos.insert((c.puerto, c.pid)))
+        .map(|c| PuertoInfo {
+            es_dev: es_herramienta_dev(&c.nombre),
+            puerto: c.puerto,
+            pid: c.pid,
+            nombre: c.nombre,
+            comando: c.comando,
+            inicio: c.inicio,
+        })
+        .collect();
+    lista.sort_by_key(|p| (p.puerto, p.pid));
+    lista
+}
+
+/// El puerto coincide con la búsqueda (número, nombre o comando; sin distinguir mayúsculas).
+pub fn coincide(p: &PuertoInfo, busqueda: &str) -> bool {
+    let b = busqueda.trim().to_lowercase();
+    b.is_empty()
+        || p.puerto.to_string().contains(&b)
+        || p.nombre.to_lowercase().contains(&b)
+        || p.comando.to_lowercase().contains(&b)
+}
+
+/// Resultado de una lectura de puertos: la lista o el mensaje de error.
+pub type ResultadoLectura = Result<Vec<PuertoInfo>, String>;
+
+/// Cada cuánto se leen los puertos mientras la ventana completa está visible.
+pub const INTERVALO_PUERTOS: Duration = Duration::from_secs(2);
+
+/// Toca leer los puertos: nunca se han leído o ya pasó `INTERVALO_PUERTOS`.
+pub fn toca_leer(ultima: Option<Instant>, ahora: Instant) -> bool {
+    ultima.is_none_or(|t| ahora.duration_since(t) >= INTERVALO_PUERTOS)
+}
+
+/// Lee todos los sockets TCP en escucha y los completa con datos de `sysinfo`.
+pub fn leer_candidatos(sys: &mut System) -> Result<Vec<Candidato>, String> {
+    let sockets: Vec<listeners::Listener> = listeners::get_all()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|l| l.protocol == Protocol::TCP && l.state == SocketState::Listen)
+        .collect();
+
+    // Solo se refrescan los procesos implicados, y con los datos que hacen falta
+    let propio = sysinfo::get_current_pid().ok();
+    let mut pids: Vec<Pid> = sockets
+        .iter()
+        .map(|l| Pid::from_u32(l.process.pid))
+        .collect();
+    pids.extend(propio);
+    pids.sort();
+    pids.dedup();
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&pids),
+        false,
+        ProcessRefreshKind::nothing()
+            .with_user(UpdateKind::OnlyIfNotSet)
+            .with_cmd(UpdateKind::OnlyIfNotSet)
+            .with_exe(UpdateKind::OnlyIfNotSet),
+    );
+
+    let usuario = propio
+        .and_then(|p| sys.process(p))
+        .and_then(|p| p.user_id())
+        .cloned();
+
+    Ok(sockets
+        .iter()
+        .filter_map(|l| {
+            // Si el proceso terminó entre las dos lecturas, se omite
+            let proceso = sys.process(Pid::from_u32(l.process.pid))?;
+            let cmd: Vec<String> = proceso
+                .cmd()
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            Some(Candidato {
+                puerto: l.socket.port(),
+                pid: l.process.pid,
+                nombre: l.process.name.clone(),
+                ruta: l.process.path.clone(),
+                comando: comando_legible(&cmd, &l.process.path, &l.process.name),
+                inicio: proceso.start_time(),
+                es_del_usuario: usuario.is_some() && proceso.user_id() == usuario.as_ref(),
+            })
+        })
+        .collect())
+}
+
+/// Lista de puertos de desarrollo lista para mostrar.
+pub fn leer(sys: &mut System) -> ResultadoLectura {
+    let pid_propio = sysinfo::get_current_pid().map(|p| p.as_u32()).unwrap_or(0);
+    Ok(preparar(leer_candidatos(sys)?, pid_propio))
+}
+
+/// Cuánto se espera a que un proceso se cierre tras pedírselo.
+pub const ESPERA_CIERRE: Duration = Duration::from_secs(3);
+
+/// Qué pasó al intentar terminar un proceso.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResultadoCierre {
+    /// El proceso terminó.
+    Cerrado,
+    /// Ya no existía antes de actuar.
+    YaTerminado,
+    /// Sigue vivo tras la espera.
+    NoResponde,
+    /// El sistema no dejó enviarle la señal.
+    SinPermiso,
+    /// El PID ahora es de otro proceso: no se tocó.
+    Cambio,
+}
+
+/// Margen, en segundos, al comparar horas de inicio. En Linux se calculan a partir de la
+/// hora de arranque del sistema, que puede variar ~1 s entre lecturas o por ajustes de NTP;
+/// sin margen, la protección contra PID reutilizado impediría cerrar cualquier proceso.
+const TOLERANCIA_INICIO: u64 = 2;
+
+/// Dos horas de inicio corresponden al mismo proceso.
+fn mismo_inicio(a: u64, b: u64) -> bool {
+    a.abs_diff(b) <= TOLERANCIA_INICIO
+}
+
+fn refrescar(sys: &mut System, pid: Pid) {
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        true,
+        ProcessRefreshKind::nothing(),
+    );
+}
+
+/// El proceso de `p` sigue vivo (mismo PID y misma hora de inicio, y no es un zombi).
+fn esta_vivo(sys: &mut System, p: &PuertoInfo) -> bool {
+    let pid = Pid::from_u32(p.pid);
+    refrescar(sys, pid);
+    sys.process(pid).is_some_and(|proceso| {
+        mismo_inicio(proceso.start_time(), p.inicio) && proceso.status() != ProcessStatus::Zombie
+    })
+}
+
+/// Termina el proceso que ocupa el puerto. Primero comprueba que el PID sigue siendo
+/// el mismo proceso. Sin `forzar` envía SIGTERM (en Windows, donde no existe, cierra
+/// directamente); con `forzar`, SIGKILL. Después espera hasta `ESPERA_CIERRE`.
+/// Bloquea: debe llamarse desde un hilo aparte.
+pub fn terminar(p: &PuertoInfo, forzar: bool) -> ResultadoCierre {
+    let pid = Pid::from_u32(p.pid);
+    let mut sys = System::new();
+    refrescar(&mut sys, pid);
+
+    let Some(proceso) = sys.process(pid) else {
+        return ResultadoCierre::YaTerminado;
+    };
+    if !mismo_inicio(proceso.start_time(), p.inicio) {
+        return ResultadoCierre::Cambio;
+    }
+    if proceso.status() == ProcessStatus::Zombie {
+        return ResultadoCierre::YaTerminado;
+    }
+
+    let enviada = if forzar {
+        proceso.kill()
+    } else {
+        proceso
+            .kill_with(Signal::Term)
+            .unwrap_or_else(|| proceso.kill())
+    };
+    if !enviada {
+        return if esta_vivo(&mut sys, p) {
+            ResultadoCierre::SinPermiso
+        } else {
+            ResultadoCierre::YaTerminado
+        };
+    }
+
+    let limite = Instant::now() + ESPERA_CIERRE;
+    while Instant::now() < limite {
+        if !esta_vivo(&mut sys, p) {
+            return ResultadoCierre::Cerrado;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    ResultadoCierre::NoResponde
+}
+
+impl ResultadoCierre {
+    /// La fila debe desaparecer de la lista (el puerto quedó libre o el dato ya no vale).
+    pub fn quita_fila(self) -> bool {
+        matches!(
+            self,
+            ResultadoCierre::Cerrado | ResultadoCierre::YaTerminado | ResultadoCierre::Cambio
+        )
+    }
+}
+
+/// Texto del aviso tras intentar terminar un proceso, y si es un éxito.
+pub fn mensaje_resultado(r: ResultadoCierre, puerto: u16) -> (String, bool) {
+    match r {
+        ResultadoCierre::Cerrado => (format!("✓ Puerto {puerto} liberado"), true),
+        ResultadoCierre::YaTerminado => ("El proceso ya había terminado.".to_string(), true),
+        ResultadoCierre::SinPermiso => (
+            "No tienes permiso para terminar este proceso.".to_string(),
+            false,
+        ),
+        ResultadoCierre::Cambio => (
+            "El proceso ya no existe o cambió. La lista se ha actualizado.".to_string(),
+            false,
+        ),
+        // Solo llega aquí tras «Forzar cierre»
+        ResultadoCierre::NoResponde => (
+            "El proceso no se cerró. Puede que necesites permisos de administrador.".to_string(),
+            false,
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn candidato(puerto: u16, pid: u32, nombre: &str, ruta: &str) -> Candidato {
+        Candidato {
+            puerto,
+            pid,
+            nombre: nombre.to_string(),
+            ruta: ruta.to_string(),
+            comando: format!("{nombre} servidor"),
+            inicio: 1000,
+            es_del_usuario: true,
+        }
+    }
+
+    #[test]
+    fn proceso_propio_en_puerto_alto_entra() {
+        assert!(es_de_desarrollo(&candidato(
+            4200,
+            10,
+            "node",
+            "/usr/local/bin/node"
+        )));
+    }
+
+    #[test]
+    fn proceso_de_otro_usuario_no_entra() {
+        let mut c = candidato(4200, 10, "node", "/usr/local/bin/node");
+        c.es_del_usuario = false;
+        assert!(!es_de_desarrollo(&c));
+    }
+
+    #[test]
+    fn puerto_menor_que_1024_no_entra() {
+        assert!(!es_de_desarrollo(&candidato(
+            80,
+            10,
+            "node",
+            "/usr/local/bin/node"
+        )));
+        assert!(es_de_desarrollo(&candidato(
+            1024,
+            10,
+            "node",
+            "/usr/local/bin/node"
+        )));
+    }
+
+    #[test]
+    fn ejecutables_del_sistema_no_entran() {
+        assert!(en_carpeta_del_sistema(
+            "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter"
+        ));
+        assert!(en_carpeta_del_sistema("/usr/libexec/rapportd"));
+        assert!(en_carpeta_del_sistema("/usr/sbin/sshd"));
+        assert!(en_carpeta_del_sistema("/usr/lib/systemd/systemd-resolved"));
+        assert!(en_carpeta_del_sistema(r"C:\Windows\System32\svchost.exe"));
+        assert!(en_carpeta_del_sistema(r"c:\windows\system32\svchost.exe"));
+        assert!(!en_carpeta_del_sistema("/usr/local/bin/node"));
+        assert!(!en_carpeta_del_sistema(r"C:\Program Files\nodejs\node.exe"));
+    }
+
+    #[test]
+    fn airplay_propio_en_5000_no_entra() {
+        let c = candidato(
+            5000,
+            10,
+            "ControlCenter",
+            "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter",
+        );
+        assert!(!es_de_desarrollo(&c));
+    }
+
+    #[test]
+    fn reconoce_herramientas_de_desarrollo() {
+        for n in [
+            "node",
+            "node.exe",
+            "NODE",
+            "python3",
+            "python3.12",
+            "java",
+            "deno",
+            "bun",
+            "dotnet",
+            "ruby",
+            "php",
+            "go",
+        ] {
+            assert!(es_herramienta_dev(n), "{n}");
+        }
+        for n in ["Safari", "Spotify", "ControlCenter"] {
+            assert!(!es_herramienta_dev(n), "{n}");
+        }
+    }
+
+    #[test]
+    fn comando_vacio_usa_la_ruta_o_el_nombre() {
+        let args = vec!["node".to_string(), "server.js".to_string()];
+        assert_eq!(
+            comando_legible(&args, "/usr/local/bin/node", "node"),
+            "node server.js"
+        );
+        assert_eq!(
+            comando_legible(&[], "/usr/local/bin/node", "node"),
+            "/usr/local/bin/node"
+        );
+        assert_eq!(comando_legible(&[], "", "node"), "node");
+    }
+
+    #[test]
+    fn une_ipv4_e_ipv6_del_mismo_proceso() {
+        let lista = preparar(
+            vec![
+                candidato(4200, 10, "node", "/usr/local/bin/node"),
+                candidato(4200, 10, "node", "/usr/local/bin/node"),
+            ],
+            1,
+        );
+        assert_eq!(lista.len(), 1);
+    }
+
+    #[test]
+    fn dos_procesos_en_el_mismo_puerto_son_dos_filas() {
+        let lista = preparar(
+            vec![
+                candidato(4200, 10, "node", "/usr/local/bin/node"),
+                candidato(4200, 11, "node", "/usr/local/bin/node"),
+            ],
+            1,
+        );
+        assert_eq!(lista.len(), 2);
+    }
+
+    #[test]
+    fn ordena_por_puerto_y_excluye_la_propia_app() {
+        let lista = preparar(
+            vec![
+                candidato(8080, 12, "java", "/usr/bin/java"),
+                candidato(3000, 11, "node", "/usr/local/bin/node"),
+                candidato(4200, 1, "monitor_sistema", "/Applications/Monitor.app/m"),
+            ],
+            1,
+        );
+        let puertos: Vec<u16> = lista.iter().map(|p| p.puerto).collect();
+        assert_eq!(puertos, vec![3000, 8080]);
+        assert!(lista.iter().all(|p| p.es_dev));
+    }
+
+    #[test]
+    fn busqueda_por_numero_nombre_y_comando() {
+        let mut c = candidato(4200, 10, "node", "/usr/local/bin/node");
+        c.comando = "node /proyecto/node_modules/.bin/ng serve --port 4200".to_string();
+        let p = &preparar(vec![c], 1)[0];
+        assert!(coincide(p, ""));
+        assert!(coincide(p, "4200"));
+        assert!(coincide(p, "NODE"));
+        assert!(coincide(p, "  ng serve  "));
+        assert!(!coincide(p, "python"));
+    }
+
+    #[test]
+    fn la_lectura_encuentra_un_puerto_real_con_su_pid() {
+        let servidor = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let puerto = servidor.local_addr().unwrap().port();
+        let pid = std::process::id();
+
+        let mut sys = sysinfo::System::new();
+        let candidatos = leer_candidatos(&mut sys).unwrap();
+        let propio = candidatos
+            .iter()
+            .find(|c| c.puerto == puerto && c.pid == pid)
+            .expect("el puerto del test debería aparecer");
+        assert!(propio.es_del_usuario);
+        assert!(propio.inicio > 0);
+        assert!(!propio.comando.is_empty());
+
+        // `leer` aplica el filtro y excluye la propia app
+        assert!(leer(&mut sys).unwrap().iter().all(|p| p.pid != pid));
+    }
+
+    #[test]
+    fn misma_hora_de_inicio_tolera_desfases_pequenos() {
+        // En Linux la hora de inicio depende de la hora de arranque del sistema,
+        // que puede variar ~1 s entre lecturas o por ajustes de NTP
+        assert!(mismo_inicio(1000, 1000));
+        assert!(mismo_inicio(1000, 1001));
+        assert!(mismo_inicio(1001, 999));
+        assert!(!mismo_inicio(1000, 1003));
+        assert!(!mismo_inicio(1000, 5000));
+    }
+
+    #[test]
+    fn cadencia_de_lectura() {
+        let ahora = Instant::now();
+        assert!(toca_leer(None, ahora));
+        assert!(!toca_leer(Some(ahora), ahora + Duration::from_millis(1500)));
+        assert!(toca_leer(Some(ahora), ahora + INTERVALO_PUERTOS));
+    }
+
+    #[test]
+    fn mensajes_de_resultado() {
+        assert_eq!(
+            mensaje_resultado(ResultadoCierre::Cerrado, 4200),
+            ("✓ Puerto 4200 liberado".to_string(), true)
+        );
+        assert_eq!(
+            mensaje_resultado(ResultadoCierre::YaTerminado, 4200),
+            ("El proceso ya había terminado.".to_string(), true)
+        );
+        assert_eq!(
+            mensaje_resultado(ResultadoCierre::SinPermiso, 4200),
+            (
+                "No tienes permiso para terminar este proceso.".to_string(),
+                false
+            )
+        );
+        assert_eq!(
+            mensaje_resultado(ResultadoCierre::Cambio, 4200),
+            (
+                "El proceso ya no existe o cambió. La lista se ha actualizado.".to_string(),
+                false
+            )
+        );
+        assert!(!mensaje_resultado(ResultadoCierre::NoResponde, 4200).1);
+    }
+
+    #[test]
+    fn que_resultados_quitan_la_fila() {
+        assert!(ResultadoCierre::Cerrado.quita_fila());
+        assert!(ResultadoCierre::YaTerminado.quita_fila());
+        assert!(ResultadoCierre::Cambio.quita_fila());
+        assert!(!ResultadoCierre::NoResponde.quita_fila());
+        assert!(!ResultadoCierre::SinPermiso.quita_fila());
+    }
+
+    use std::io::{BufRead, BufReader};
+    use std::process::{Child, Command, Stdio};
+
+    const VAR_SERVIDOR: &str = "MONITOR_SERVIDOR_AUXILIAR";
+
+    /// No es un test real: es el «modo servidor» del ejecutable de tests.
+    /// Solo actúa si lo lanza `lanzar_servidor` con la variable de entorno.
+    #[test]
+    #[ignore]
+    fn servidor_auxiliar() {
+        if std::env::var(VAR_SERVIDOR).is_err() {
+            return;
+        }
+        let servidor = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        println!("PUERTO={}", servidor.local_addr().unwrap().port());
+        std::thread::sleep(std::time::Duration::from_secs(60));
+    }
+
+    /// Lanza el propio ejecutable de tests como proceso hijo que escucha en un puerto.
+    fn lanzar_servidor() -> (Child, u16) {
+        let mut hijo = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "puertos::tests::servidor_auxiliar",
+                "--exact",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env(VAR_SERVIDOR, "1")
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let salida = BufReader::new(hijo.stdout.take().unwrap());
+        let puerto = salida
+            .lines()
+            .map_while(Result::ok)
+            .find_map(|l| l.strip_prefix("PUERTO=").map(|p| p.parse().unwrap()))
+            .expect("el servidor auxiliar no indicó su puerto");
+        (hijo, puerto)
+    }
+
+    fn info_del_hijo(hijo: &Child, puerto: u16) -> PuertoInfo {
+        let mut sys = sysinfo::System::new();
+        leer(&mut sys)
+            .unwrap()
+            .into_iter()
+            .find(|p| p.pid == hijo.id() && p.puerto == puerto)
+            .expect("el servidor auxiliar debería aparecer en la lista")
+    }
+
+    fn puerto_libre(puerto: u16) -> bool {
+        std::net::TcpListener::bind(("127.0.0.1", puerto)).is_ok()
+    }
+
+    #[test]
+    fn terminar_libera_el_puerto() {
+        let (mut hijo, puerto) = lanzar_servidor();
+        let info = info_del_hijo(&hijo, puerto);
+
+        assert_eq!(terminar(&info, false), ResultadoCierre::Cerrado);
+        hijo.wait().unwrap();
+        assert!(puerto_libre(puerto));
+    }
+
+    #[test]
+    fn proceso_que_ya_termino() {
+        let (mut hijo, puerto) = lanzar_servidor();
+        let info = info_del_hijo(&hijo, puerto);
+        hijo.kill().unwrap();
+        hijo.wait().unwrap();
+
+        assert_eq!(terminar(&info, false), ResultadoCierre::YaTerminado);
+    }
+
+    #[test]
+    fn pid_reutilizado_no_se_toca() {
+        let (mut hijo, puerto) = lanzar_servidor();
+        let mut info = info_del_hijo(&hijo, puerto);
+        info.inicio += 10; // simula otro proceso con el mismo PID
+
+        assert_eq!(terminar(&info, false), ResultadoCierre::Cambio);
+        assert!(
+            hijo.try_wait().unwrap().is_none(),
+            "el proceso debe seguir vivo"
+        );
+        hijo.kill().unwrap();
+        hijo.wait().unwrap();
+    }
+}
