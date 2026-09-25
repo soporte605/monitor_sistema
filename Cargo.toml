@@ -1,0 +1,9 @@
+[package]
+name = "monitor_sistema"
+version = "0.1.0"
+edition = "2024"
+description = "Monitor del sistema con interfaz gráfica (CPU, memoria y procesos)"
+
+[dependencies]
+eframe = "0.36.2"
+sysinfo = "0.39.6"
