@@ -5,9 +5,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use eframe::egui::{
     self, Align2, Color32, FontId, Key, Modifiers, Pos2, Rect, RichText, Sense, Stroke, StrokeKind,
@@ -52,15 +54,19 @@ struct Muestra {
     swap_usada: u64,
     swap_total: u64,
     procesos: Vec<ProcesoInfo>,
+    /// Puertos leídos en esta vuelta (solo cada `INTERVALO_PUERTOS` y con la ventana completa).
+    puertos: Option<puertos::ResultadoLectura>,
 }
 
 /// Lanza un hilo que lee el sistema cada `INTERVALO` y envía una `Muestra` por el canal.
-/// Así la interfaz nunca se bloquea esperando a `sysinfo`.
-fn iniciar_lector(ctx: egui::Context) -> Receiver<Muestra> {
+/// Así la interfaz nunca se bloquea esperando a `sysinfo`. Los puertos solo se leen
+/// mientras `leer_puertos` está activo (ventana completa visible).
+fn iniciar_lector(ctx: egui::Context, leer_puertos: Arc<AtomicBool>) -> Receiver<Muestra> {
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
         let mut sys = System::new_all();
+        let mut ultima_lectura_puertos: Option<Instant> = None;
         loop {
             // El uso de CPU se calcula entre dos lecturas, por eso primero se espera
             thread::sleep(INTERVALO);
@@ -81,6 +87,18 @@ fn iniciar_lector(ctx: egui::Context) -> Receiver<Muestra> {
             procesos.sort_by(|a, b| b.cpu.total_cmp(&a.cpu));
             procesos.truncate(TOP_PROCESOS);
 
+            let puertos = if leer_puertos.load(Ordering::Relaxed) {
+                let ahora = Instant::now();
+                puertos::toca_leer(ultima_lectura_puertos, ahora).then(|| {
+                    ultima_lectura_puertos = Some(ahora);
+                    puertos::leer(&mut sys)
+                })
+            } else {
+                // Al volver a la ventana completa se lee enseguida
+                ultima_lectura_puertos = None;
+                None
+            };
+
             let muestra = Muestra {
                 cpu_global: sys.global_cpu_usage(),
                 nucleos: sys.cpus().iter().map(|c| c.cpu_usage()).collect(),
@@ -89,6 +107,7 @@ fn iniciar_lector(ctx: egui::Context) -> Receiver<Muestra> {
                 swap_usada: sys.used_swap(),
                 swap_total: sys.total_swap(),
                 procesos,
+                puertos,
             };
 
             // Si la ventana se cerró, el receptor ya no existe y el hilo termina
@@ -113,18 +132,25 @@ struct Monitor {
     ventana_completa: Option<(Pos2, Vec2)>,
     /// Última posición del widget, para que vuelva donde se dejó.
     pos_widget: Option<Pos2>,
+    /// Activo mientras se ve la ventana completa: el hilo lector lee los puertos.
+    leer_puertos: Arc<AtomicBool>,
+    /// Última lectura de puertos (`None` hasta la primera).
+    puertos: Option<puertos::ResultadoLectura>,
 }
 
 impl Monitor {
     fn new(ctx: egui::Context) -> Self {
+        let leer_puertos = Arc::new(AtomicBool::new(true));
         Self {
-            rx: iniciar_lector(ctx),
+            rx: iniciar_lector(ctx, leer_puertos.clone()),
             actual: None,
             hist_cpu: VecDeque::with_capacity(HISTORIAL),
             hist_ram: VecDeque::with_capacity(HISTORIAL),
             compacto: false,
             ventana_completa: None,
             pos_widget: None,
+            leer_puertos,
+            puertos: None,
         }
     }
 
@@ -163,11 +189,20 @@ impl Monitor {
 
     /// Toma las muestras nuevas que haya enviado el hilo lector (sin bloquear).
     fn recibir(&mut self) {
-        for m in self.rx.try_iter() {
+        let muestras: Vec<Muestra> = self.rx.try_iter().collect();
+        for mut m in muestras {
             empujar(&mut self.hist_cpu, m.cpu_global);
             empujar(&mut self.hist_ram, porcentaje(m.mem_usada, m.mem_total));
+            if let Some(p) = m.puertos.take() {
+                self.actualizar_puertos(p);
+            }
             self.actual = Some(m);
         }
+    }
+
+    /// Guarda una lectura nueva de puertos.
+    fn actualizar_puertos(&mut self, nuevos: puertos::ResultadoLectura) {
+        self.puertos = Some(nuevos);
     }
 }
 
@@ -711,6 +746,7 @@ impl Monitor {
 
 impl eframe::App for Monitor {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.leer_puertos.store(!self.compacto, Ordering::Relaxed);
         self.recibir();
 
         let atajo = ui.ctx().input_mut(|i| i.consume_shortcut(&ATAJO_COMPACTO));

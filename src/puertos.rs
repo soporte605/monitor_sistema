@@ -109,6 +109,14 @@ pub fn coincide(p: &PuertoInfo, busqueda: &str) -> bool {
 /// Resultado de una lectura de puertos: la lista o el mensaje de error.
 pub type ResultadoLectura = Result<Vec<PuertoInfo>, String>;
 
+/// Cada cuánto se leen los puertos mientras la ventana completa está visible.
+pub const INTERVALO_PUERTOS: Duration = Duration::from_secs(2);
+
+/// Toca leer los puertos: nunca se han leído o ya pasó `INTERVALO_PUERTOS`.
+pub fn toca_leer(ultima: Option<Instant>, ahora: Instant) -> bool {
+    ultima.is_none_or(|t| ahora.duration_since(t) >= INTERVALO_PUERTOS)
+}
+
 /// Lee todos los sockets TCP en escucha y los completa con datos de `sysinfo`.
 pub fn leer_candidatos(sys: &mut System) -> Result<Vec<Candidato>, String> {
     let sockets: Vec<listeners::Listener> = listeners::get_all()
@@ -428,6 +436,14 @@ mod tests {
 
         // `leer` aplica el filtro y excluye la propia app
         assert!(leer(&mut sys).unwrap().iter().all(|p| p.pid != pid));
+    }
+
+    #[test]
+    fn cadencia_de_lectura() {
+        let ahora = Instant::now();
+        assert!(toca_leer(None, ahora));
+        assert!(!toca_leer(Some(ahora), ahora + Duration::from_millis(1500)));
+        assert!(toca_leer(Some(ahora), ahora + INTERVALO_PUERTOS));
     }
 
     use std::io::{BufRead, BufReader};
