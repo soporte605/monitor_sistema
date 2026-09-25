@@ -10,6 +10,9 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 ### Añadido
 - README en inglés, con selector de idioma, resumen de características y acceso destacado a las descargas en ambas versiones.
 
+### Corregido
+- La barra de desplazamiento de la ventana completa ya no tapa el borde derecho del contenido (gráficas, barras y columna de memoria) al pasar el ratón: ahora ocupa su propio espacio.
+
 ## [0.2.1] - 2026-09-25
 
 ### Corregido
