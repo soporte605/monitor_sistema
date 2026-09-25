@@ -7,6 +7,11 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Sin publicar]
 
+### Corregido
+- La tabla de procesos ahora ocupa todo el ancho de la ventana; la columna "Nombre" se estira y recorta los nombres largos con "…" (el nombre completo aparece al pasar el ratón).
+- Las barras de los núcleos se reparten en columnas según el ancho disponible en lugar de tener 180 px fijos.
+- Las secciones de CPU, memoria y procesos ocupan siempre el ancho completo.
+
 ## [0.1.0] - 2026-09-24
 
 ### Añadido

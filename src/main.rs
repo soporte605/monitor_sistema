@@ -124,7 +124,6 @@ impl eframe::App for Monitor {
                 // ── Encabezado ─────────────────────────────
                 ui.horizontal(|ui| {
                     ui.heading(RichText::new("Monitor del sistema").strong());
-                    ui.label(RichText::new(concat!("v", env!("CARGO_PKG_VERSION"))).weak());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let up = System::uptime();
                         ui.label(format!("Encendido: {}h {:02}m", up / 3600, (up % 3600) / 60));
