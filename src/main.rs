@@ -973,8 +973,13 @@ impl Monitor {
             }
             ui.add_space(6.0);
             ui.strong(format!("{} · PID {}", p.nombre, p.pid));
-            // Línea de comandos completa, con ajuste de línea
-            ui.label(RichText::new(&p.comando).small().weak());
+            // Línea de comandos completa, con ajuste de línea. Con desplazamiento para que
+            // un comando muy largo (p. ej. un classpath de Java) no saque los botones de la ventana
+            egui::ScrollArea::vertical()
+                .max_height(120.0)
+                .show(ui, |ui| {
+                    ui.label(RichText::new(&p.comando).small().weak());
+                });
             if !conf.forzar {
                 ui.add_space(6.0);
                 ui.label(if cfg!(windows) {
