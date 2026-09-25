@@ -7,6 +7,8 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Sin publicar]
 
+## [0.2.1] - 2026-09-25
+
 ### Corregido
 - El texto de las barras de núcleos, RAM y swap ahora se lee siempre: sobre la parte coloreada usa el color que más contrasta con ella (por ejemplo, texto oscuro sobre amarillo) y sobre el fondo mantiene el color normal.
 
@@ -40,6 +42,7 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 - Tabla con los 8 procesos que más CPU consumen (PID, nombre, CPU y memoria).
 - Encabezado con nombre del equipo, sistema operativo, tiempo encendido y versión de la app.
 
-[Sin publicar]: https://github.com/soporte605/monitor_sistema/compare/v0.2.0...develop
+[Sin publicar]: https://github.com/soporte605/monitor_sistema/compare/v0.2.1...develop
+[0.2.1]: https://github.com/soporte605/monitor_sistema/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/soporte605/monitor_sistema/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/soporte605/monitor_sistema/releases/tag/v0.1.0
