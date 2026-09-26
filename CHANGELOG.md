@@ -7,6 +7,8 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Sin publicar]
 
+## [0.3.0] - 2026-09-25
+
 ### Añadido
 - Pestaña «Puertos»: lista los puertos TCP de desarrollo en escucha (de tu usuario, 1024 o mayores y fuera de las carpetas del sistema) con el proceso que ocupa cada uno, su línea de comandos y la etiqueta [dev] para herramientas conocidas. Tiene buscador y permite terminar el proceso con confirmación: primero se le pide que se cierre y, si no responde en 3 segundos, se puede forzar.
 
@@ -53,7 +55,8 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 - Tabla con los 8 procesos que más CPU consumen (PID, nombre, CPU y memoria).
 - Encabezado con nombre del equipo, sistema operativo, tiempo encendido y versión de la app.
 
-[Sin publicar]: https://github.com/soporte605/monitor_sistema/compare/v0.2.2...develop
+[Sin publicar]: https://github.com/soporte605/monitor_sistema/compare/v0.3.0...develop
+[0.3.0]: https://github.com/soporte605/monitor_sistema/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/soporte605/monitor_sistema/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/soporte605/monitor_sistema/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/soporte605/monitor_sistema/compare/v0.1.0...v0.2.0
