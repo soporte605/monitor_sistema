@@ -7,6 +7,8 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Sin publicar]
 
+## [0.3.1] - 2026-09-27
+
 ### Corregido
 - Si se pasaba al modo compacto con el diálogo para terminar un proceso abierto, el diálogo volvía a aparecer al regresar a la ventana completa. Ahora se descarta al cambiar de modo (#33, gracias a @Tiyatrotist).
 
@@ -58,7 +60,8 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 - Tabla con los 8 procesos que más CPU consumen (PID, nombre, CPU y memoria).
 - Encabezado con nombre del equipo, sistema operativo, tiempo encendido y versión de la app.
 
-[Sin publicar]: https://github.com/soporte605/monitor_sistema/compare/v0.3.0...develop
+[Sin publicar]: https://github.com/soporte605/monitor_sistema/compare/v0.3.1...develop
+[0.3.1]: https://github.com/soporte605/monitor_sistema/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/soporte605/monitor_sistema/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/soporte605/monitor_sistema/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/soporte605/monitor_sistema/compare/v0.2.0...v0.2.1
