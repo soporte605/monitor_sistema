@@ -172,6 +172,8 @@ struct Monitor {
     puertos: Option<puertos::ResultadoLectura>,
     pestana: Pestana,
     busqueda: String,
+    /// Nombre del equipo y versión del sistema, calculados una sola vez al arrancar.
+    info_equipo: String,
     /// Filas con un cierre en marcha, por (puerto, PID).
     en_curso: HashMap<(u16, u32), EstadoCierre>,
     confirmacion: Option<Confirmacion>,
@@ -184,6 +186,12 @@ impl Monitor {
     fn new(ctx: egui::Context) -> Self {
         let leer_puertos = Arc::new(AtomicBool::new(true));
         let (tx_cierre, rx_cierre) = mpsc::channel();
+        let info_equipo = format!(
+            "{} · {} {}",
+            System::host_name().unwrap_or_default(),
+            System::name().unwrap_or_default(),
+            System::os_version().unwrap_or_default()
+        );
         Self {
             rx: iniciar_lector(ctx, leer_puertos.clone()),
             actual: None,
@@ -196,6 +204,7 @@ impl Monitor {
             puertos: None,
             pestana: Pestana::Sistema,
             busqueda: String::new(),
+            info_equipo,
             en_curso: HashMap::new(),
             confirmacion: None,
             aviso: None,
@@ -206,6 +215,8 @@ impl Monitor {
 
     /// Cambia entre la ventana completa y el widget compacto siempre visible.
     fn alternar_modo(&mut self, ctx: &egui::Context) {
+        self.confirmacion = None;
+
         let (exterior, interior, monitor) = ctx.input(|i| {
             let v = i.viewport();
             (v.outer_rect, v.inner_rect, v.monitor_size)
@@ -634,12 +645,7 @@ impl Monitor {
                             ));
                         });
                     });
-                    ui.label(format!(
-                        "{} · {} {}",
-                        System::host_name().unwrap_or_default(),
-                        System::name().unwrap_or_default(),
-                        System::os_version().unwrap_or_default()
-                    ));
+                    ui.label(&self.info_equipo);
                     ui.add_space(8.0);
 
                     // ── Pestañas ───────────────────────────────
