@@ -75,7 +75,7 @@ La pestaña **Puertos** muestra qué proceso ocupa cada puerto de desarrollo, po
 Dependencias: `eframe` (ventana y GUI) y `sysinfo` (datos del sistema). Funciona en Windows, macOS y Linux.
 
 ## Contribuir
-¡Las contribuciones son bienvenidas! Reporta fallos o propone ideas en [Issues](https://github.com/soporte605/monitor_sistema/issues) y envía cambios mediante Pull Request hacia `develop`. Los detalles están en la [guía para contribuir](CONTRIBUTING.md).
+¡Las contribuciones son bienvenidas! Reporta fallos o propone ideas en [Issues](https://github.com/soporte605/monitor_sistema/issues) y envía cambios mediante Pull Request hacia `develop`. Los detalles están en la [guía para contribuir](CONTRIBUTING.md), y la organización del código en [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Flujo de trabajo
 
