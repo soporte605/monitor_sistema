@@ -206,6 +206,8 @@ impl Monitor {
 
     /// Cambia entre la ventana completa y el widget compacto siempre visible.
     fn alternar_modo(&mut self, ctx: &egui::Context) {
+        self.confirmacion = None;
+
         let (exterior, interior, monitor) = ctx.input(|i| {
             let v = i.viewport();
             (v.outer_rect, v.inner_rect, v.monitor_size)
