@@ -12,6 +12,9 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 ### Corregido
 - Si se pasaba al modo compacto con el diálogo para terminar un proceso abierto, el diálogo volvía a aparecer al regresar a la ventana completa. Ahora se descarta al cambiar de modo (#33, gracias a @Tiyatrotist).
 
+### Cambiado
+- La cabecera ya no consulta el nombre del equipo ni la versión del sistema en cada fotograma, lo que ahorra trabajo en cada redibujado (#34, gracias a @Tiyatrotist).
+
 ## [0.3.0] - 2026-09-25
 
 ### Añadido
