@@ -44,7 +44,7 @@ const ATAJO_COMPACTO: egui::KeyboardShortcut =
 struct ProcesoInfo {
     pid: u32,
     nombre: String,
-    cpu: f32,
+    cpu: f32, // porcentaje de la capacidad total de CPU, como cpu_global
     memoria: u64,
 }
 
@@ -77,13 +77,14 @@ fn iniciar_lector(ctx: egui::Context, leer_puertos: Arc<AtomicBool>) -> Receiver
             sys.refresh_memory();
             sys.refresh_processes(ProcessesToUpdate::All, true);
 
+            let num_cpus = sys.cpus().len();
             let mut procesos: Vec<ProcesoInfo> = sys
                 .processes()
                 .values()
                 .map(|p| ProcesoInfo {
                     pid: p.pid().as_u32(),
                     nombre: p.name().to_string_lossy().into_owned(),
-                    cpu: p.cpu_usage(),
+                    cpu: cpu_proceso_total(p.cpu_usage(), num_cpus),
                     memoria: p.memory(),
                 })
                 .collect();
@@ -335,6 +336,16 @@ fn porcentaje(usado: u64, total: u64) -> f32 {
         0.0
     } else {
         usado as f32 / total as f32 * 100.0
+    }
+}
+
+/// `sysinfo` expresa el uso de un proceso por CPU lógica (puede superar el 100 %).
+/// Dividir entre las CPU lógicas lo pone en la escala 0–100 % del CPU global.
+fn cpu_proceso_total(uso_por_cpu: f32, num_cpus: usize) -> f32 {
+    if num_cpus == 0 {
+        0.0
+    } else {
+        uso_por_cpu / num_cpus as f32
     }
 }
 
@@ -1179,6 +1190,15 @@ mod tests {
     fn porcentaje_con_total_cero() {
         assert_eq!(porcentaje(5, 0), 0.0);
         assert_eq!(porcentaje(1, 4), 25.0);
+    }
+
+    #[test]
+    fn cpu_de_proceso_comparable_con_cpu_global() {
+        assert_eq!(cpu_proceso_total(100.0, 4), 25.0);
+        assert_eq!(cpu_proceso_total(340.0, 4), 85.0);
+        assert_eq!(cpu_proceso_total(400.0, 4), 100.0);
+        assert_eq!(cpu_proceso_total(100.0, 1), 100.0);
+        assert_eq!(cpu_proceso_total(100.0, 0), 0.0);
     }
 
     #[test]
