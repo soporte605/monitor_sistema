@@ -178,12 +178,21 @@ struct Monitor {
     aviso: Option<Aviso>,
     tx_cierre: Sender<RespuestaCierre>,
     rx_cierre: Receiver<RespuestaCierre>,
+    /// Información estática del sistema (se consulta una sola vez).
+    host_name: String,
+    os_name: String,
+    os_version: String,
 }
 
 impl Monitor {
     fn new(ctx: egui::Context) -> Self {
         let leer_puertos = Arc::new(AtomicBool::new(true));
         let (tx_cierre, rx_cierre) = mpsc::channel();
+        let sys = System::new_all();
+        // Información estática del sistema (se consulta una sola vez).
+        let host_name = sys.host_name().unwrap_or_default();
+        let os_name = sys.name().unwrap_or_default();
+        let os_version = sys.os_version().unwrap_or_default();
         Self {
             rx: iniciar_lector(ctx, leer_puertos.clone()),
             actual: None,
@@ -201,6 +210,9 @@ impl Monitor {
             aviso: None,
             tx_cierre,
             rx_cierre,
+            host_name,
+            os_name,
+            os_version,
         }
     }
 
@@ -634,12 +646,10 @@ impl Monitor {
                             ));
                         });
                     });
-                    ui.label(format!(
-                        "{} · {} {}",
-                        System::host_name().unwrap_or_default(),
-                        System::name().unwrap_or_default(),
-                        System::os_version().unwrap_or_default()
-                    ));
+ui.label(format!(
+                         "{} · {} {}",
+                         self.host_name, self.os_name, self.os_version
+                     ));
                     ui.add_space(8.0);
 
                     // ── Pestañas ───────────────────────────────
