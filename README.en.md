@@ -84,18 +84,7 @@ The app uses `eframe` / `egui` for the interface, `egui_extras` for tables and `
 
 ## Contributing
 
-Bug reports and improvement suggestions are welcome in [Issues](https://github.com/soporte605/monitor_sistema/issues). For bugs, include your operating system, app version, steps to reproduce and expected behavior. Remove personal information from screenshots before sharing them.
-
-Create branches from `develop` and submit pull requests to `develop`. Keep interface text and code comments in Spanish, and use Conventional Commits in Spanish. Before committing, run:
-
-```bash
-cargo fmt
-cargo clippy --all-targets
-cargo test
-cargo build
-```
-
-Document user-visible changes in the `[Sin publicar]` section of [CHANGELOG.md](CHANGELOG.md). See the [Spanish workflow documentation](README.md#flujo-de-trabajo) for branch and release conventions.
+Contributions are welcome! Report bugs or suggest ideas in [Issues](https://github.com/soporte605/monitor_sistema/issues), and send changes as pull requests against `develop`. CI checks every pull request on macOS, Windows and Linux. See the [contributing guide](CONTRIBUTING.en.md) for details.
 
 ## License
 
