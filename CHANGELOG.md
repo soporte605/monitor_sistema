@@ -7,6 +7,9 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Sin publicar]
 
+### Corregido
+- Si se pasaba al modo compacto con el diálogo para terminar un proceso abierto, el diálogo volvía a aparecer al regresar a la ventana completa. Ahora se descarta al cambiar de modo (#33, gracias a @Tiyatrotist).
+
 ## [0.3.0] - 2026-09-25
 
 ### Añadido
