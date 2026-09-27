@@ -74,11 +74,14 @@ La pestaña **Puertos** muestra qué proceso ocupa cada puerto de desarrollo, po
 
 Dependencias: `eframe` (ventana y GUI) y `sysinfo` (datos del sistema). Funciona en Windows, macOS y Linux.
 
+## Contribuir
+¡Las contribuciones son bienvenidas! Reporta fallos o propone ideas en [Issues](https://github.com/soporte605/monitor_sistema/issues) y envía cambios mediante Pull Request hacia `develop`. Los detalles están en la [guía para contribuir](CONTRIBUTING.md).
+
 ## Flujo de trabajo
 
 ### Ramas
-- `main`: solo versiones publicadas. Cada versión lleva un tag `vX.Y.Z`. Sin commits directos.
-- `develop`: integración del trabajo en curso. Sin commits directos; todo entra por Pull Request.
+- `main`: solo versiones publicadas. Cada versión lleva un tag `vX.Y.Z`. **Protegida:** solo cambia mediante Pull Request desde `develop`.
+- `develop`: integración del trabajo en curso. **Protegida:** todo entra por Pull Request.
 - `feature/<nombre>`, `fix/<nombre>`, `chore/<nombre>`, `docs/<nombre>`: una rama por cambio, creada desde `develop` y fusionada de vuelta con un Pull Request hacia `develop`.
 
 ### Antes de cada commit
@@ -90,6 +93,10 @@ cargo build                 # compilación limpia
 ```
 
 Todo cambio visible para el usuario se anota en `CHANGELOG.md`, sección `[Sin publicar]`, en el mismo PR que lo introduce.
+
+### Protección de ramas y CI
+- En `main` y `develop` no se puede subir directamente, forzar el push ni borrar la rama: todo cambio entra por Pull Request.
+- El workflow [`ci.yml`](.github/workflows/ci.yml) comprueba cada Pull Request en macOS, Windows y Linux (`cargo fmt --check`, `cargo clippy -- -D warnings` y `cargo test`). Tiene que pasar para poder fusionar.
 
 ### Versionado semántico
 La versión vive en `Cargo.toml` (`version = "X.Y.Z"`) y se muestra en la app.
@@ -107,13 +114,18 @@ Se usa [Conventional Commits](https://www.conventionalcommits.org/es/v1.0.0/): `
 2. En `CHANGELOG.md`, mover lo de `[Sin publicar]` a `## [X.Y.Z] - AAAA-MM-DD` y actualizar los enlaces del final.
 3. Actualizar `version` en `Cargo.toml` y ejecutar `cargo build` (actualiza `Cargo.lock`).
 4. Commit `chore(release): vX.Y.Z` y Pull Request hacia `develop`.
-5. Tras fusionarlo, avanzar `main` hasta `develop` y crear el tag anotado:
+5. Tras fusionarlo, abrir un Pull Request **de `develop` hacia `main`** con el título `chore(release): vX.Y.Z` y fusionarlo con un *merge commit* cuando pase el CI:
    ```bash
-   git checkout main && git merge --ff-only develop
-   git tag -a vX.Y.Z -m "vX.Y.Z"
-   git push origin main vX.Y.Z
+   gh pr create --base main --head develop --title "chore(release): vX.Y.Z"
    ```
-6. Al subir el tag, GitHub Actions ([`release.yml`](.github/workflows/release.yml)) compila la app y crea la Release. Comprobar que el workflow termina bien:
+6. Comprobar que el PR está fusionado y crear el tag anotado en `main`:
+   ```bash
+   gh pr view <número> --json state -q .state   # debe decir MERGED
+   git checkout main && git pull --ff-only
+   git tag -a vX.Y.Z -m "vX.Y.Z"
+   git push origin vX.Y.Z
+   ```
+7. Al subir el tag, GitHub Actions ([`release.yml`](.github/workflows/release.yml)) compila la app y crea la Release. Comprobar que el workflow termina bien:
    ```bash
    gh run watch
    ```
