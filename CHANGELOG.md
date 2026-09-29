@@ -7,6 +7,9 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Sin publicar]
 
+### Corregido
+- El porcentaje de CPU de cada proceso ahora representa su uso de la capacidad total, en la misma escala que el CPU global, incluso si usa varios hilos (#30).
+
 ## [0.3.1] - 2026-09-27
 
 ### Corregido
