@@ -84,7 +84,7 @@ The app uses `eframe` / `egui` for the interface, `egui_extras` for tables and `
 
 ## Contributing
 
-Contributions are welcome! Report bugs or suggest ideas in [Issues](https://github.com/soporte605/monitor_sistema/issues), and send changes as pull requests against `develop`. CI checks every pull request on macOS, Windows and Linux. See the [contributing guide](CONTRIBUTING.en.md) for details.
+Contributions are welcome! Report bugs or suggest ideas in [Issues](https://github.com/soporte605/monitor_sistema/issues), and send changes as pull requests against `develop`. CI checks every pull request on macOS, Windows and Linux. See the [contributing guide](CONTRIBUTING.en.md) for details and [ARCHITECTURE.md](ARCHITECTURE.md) for how the code is organized.
 
 ## License
 
