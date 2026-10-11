@@ -557,8 +557,32 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_secs(60));
     }
 
+    /// Guardián RAII para garantizar que el proceso hijo se termina y espera al salir del ámbito,
+    /// incluso si una aserción o pánico interrumpe el test prematuramente.
+    struct ProcesoHijoGuard(Child);
+
+    impl Drop for ProcesoHijoGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    impl std::ops::Deref for ProcesoHijoGuard {
+        type Target = Child;
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+
+    impl std::ops::DerefMut for ProcesoHijoGuard {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.0
+        }
+    }
+
     /// Lanza el propio ejecutable de tests como proceso hijo que escucha en un puerto.
-    fn lanzar_servidor() -> (Child, u16) {
+    fn lanzar_servidor() -> (ProcesoHijoGuard, u16) {
         let mut hijo = Command::new(std::env::current_exe().unwrap())
             .args([
                 "puertos::tests::servidor_auxiliar",
@@ -576,7 +600,7 @@ mod tests {
             .map_while(Result::ok)
             .find_map(|l| l.strip_prefix("PUERTO=").map(|p| p.parse().unwrap()))
             .expect("el servidor auxiliar no indicó su puerto");
-        (hijo, puerto)
+        (ProcesoHijoGuard(hijo), puerto)
     }
 
     fn info_del_hijo(hijo: &Child, puerto: u16) -> PuertoInfo {
