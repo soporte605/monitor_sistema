@@ -64,7 +64,7 @@ La ventana vuelve con su tamaño y posición anteriores, y el widget recuerda d�
 La pestaña **Puertos** muestra qué proceso ocupa cada puerto de desarrollo, por ejemplo el 4200 de un `ng serve` que no se cerró bien, y permite terminarlo.
 
 - Solo aparecen puertos TCP en escucha de **tu usuario**, del **1024 en adelante** y de programas que **no son del sistema**. Los servicios del sistema, como AirPlay en el 5000, no se muestran.
-- Cada fila enseña el puerto, el proceso (con la etiqueta **[dev]** si es `node`, `python`, `java`…) y su línea de comandos. Pasa el ratón por encima para verla completa con el PID.
+- Cada fila enseña el puerto, el proceso (con la insignia **dev** si es `node`, `python`, `java`…) y su línea de comandos. Pasa el ratón por encima para verla completa con el PID.
 - El buscador filtra por número de puerto, nombre o comando.
 - **Terminar** pide confirmación y después solicita al proceso que se cierre. Si no responde en 3 segundos, aparece **Forzar cierre**. En Windows el cierre es inmediato.
 
@@ -75,7 +75,7 @@ La pestaña **Puertos** muestra qué proceso ocupa cada puerto de desarrollo, po
 Dependencias: `eframe` (ventana y GUI) y `sysinfo` (datos del sistema). Funciona en Windows, macOS y Linux.
 
 ## Contribuir
-¡Las contribuciones son bienvenidas! Reporta fallos o propone ideas en [Issues](https://github.com/soporte605/monitor_sistema/issues) y envía cambios mediante Pull Request hacia `develop`. Los detalles están en la [guía para contribuir](CONTRIBUTING.md).
+¡Las contribuciones son bienvenidas! Reporta fallos o propone ideas en [Issues](https://github.com/soporte605/monitor_sistema/issues) y envía cambios mediante Pull Request hacia `develop`. Los detalles están en la [guía para contribuir](CONTRIBUTING.md), y la organización del código en [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Flujo de trabajo
 

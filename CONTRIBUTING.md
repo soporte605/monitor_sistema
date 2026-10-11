@@ -33,6 +33,10 @@ El repositorio es público: cualquiera puede proponer cambios, pero todo entra m
 
 El **CI** comprueba cada Pull Request en macOS, Windows y Linux (formato, `clippy` y tests). Tiene que pasar para poder fusionarlo. La primera vez que contribuyes, el mantenedor tiene que aprobar que se ejecute.
 
+## Arquitectura
+
+Antes de escribir código, lee [ARCHITECTURE.md](ARCHITECTURE.md): explica cómo está organizado el proyecto, hacia dónde va y cómo añadir una funcionalidad nueva.
+
 ## Convenciones
 
 - **Idioma:** los textos de la interfaz y los comentarios del código van en **español**.

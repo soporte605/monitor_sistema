@@ -33,6 +33,10 @@ The repository is public: anyone can propose changes, but everything goes throug
 
 **CI** checks every pull request on macOS, Windows and Linux (formatting, `clippy` and tests), and it must pass before merging. For first-time contributors, the maintainer has to approve the CI run.
 
+## Architecture
+
+Before writing code, read [ARCHITECTURE.md](ARCHITECTURE.md) (in Spanish, with an English summary at the top). It explains how the project is organized, where it is heading and how to add a new feature.
+
 ## Conventions
 
 - **Language:** interface text and code comments are written in **Spanish**. Issues and pull requests can be written in English or Spanish.
