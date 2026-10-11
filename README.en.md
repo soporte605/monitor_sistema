@@ -66,7 +66,7 @@ Some Linux window managers running Wayland may ignore the always-on-top setting.
 The **Ports** tab shows which process is holding each development port, such as port 4200 from an `ng serve` that did not shut down cleanly, and lets you terminate it.
 
 - Only listening TCP ports owned by **your user**, numbered **1024 or higher** and opened by **non-system programs** are listed. System services, such as AirPlay on port 5000, are hidden.
-- Each row shows the port, the process (tagged **[dev]** for `node`, `python`, `java` and similar tools) and its command line. Hover over it to see the full command and the PID.
+- Each row shows the port, the process (with the **dev** badge for `node`, `python`, `java` and similar tools) and its command line. Hover over it to see the full command and the PID.
 - The search box filters by port number, process name or command.
 - **Terminar** (Terminate) asks for confirmation and then requests the process to exit. If it does not respond within 3 seconds, **Forzar cierre** (Force quit) appears. On Windows the process is terminated immediately.
 
