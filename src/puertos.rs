@@ -234,6 +234,11 @@ pub fn terminar(p: &PuertoInfo, forzar: bool) -> ResultadoCierre {
     let Some(proceso) = sys.process(pid) else {
         return ResultadoCierre::YaTerminado;
     };
+    // Existe una ventana teórica de microsegundos entre la comprobación de la
+    // hora de inicio y el envío efectivo de la señal (además de que en macOS la
+    // resolución de inicio es de segundos). El riesgo de reciclado de PID en esa
+    // ventana mínima es despreciable en la práctica y se asume para mantener el
+    // código simple y portable sin dependencias de bajo nivel.
     if !mismo_inicio(proceso.start_time(), p.inicio) {
         return ResultadoCierre::Cambio;
     }
