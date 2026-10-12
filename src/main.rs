@@ -175,8 +175,8 @@ struct Monitor {
     busqueda: String,
     /// Nombre del equipo y versión del sistema, calculados una sola vez al arrancar.
     info_equipo: String,
-    /// Filas con un cierre en marcha, por (puerto, PID).
-    en_curso: HashMap<(u16, u32), EstadoCierre>,
+    /// Procesos con un cierre en marcha, por (PID, hora de inicio).
+    en_curso: HashMap<(u32, u64), EstadoCierre>,
     confirmacion: Option<Confirmacion>,
     aviso: Option<Aviso>,
     tx_cierre: Sender<RespuestaCierre>,
@@ -266,10 +266,10 @@ impl Monitor {
         }
     }
 
-    /// Marca la fila como «Cerrando…» y termina el proceso en un hilo aparte.
+    /// Marca el proceso como «Cerrando…» y lo termina en un hilo aparte.
     fn lanzar_cierre(&mut self, p: puertos::PuertoInfo, forzar: bool, ctx: &egui::Context) {
         self.en_curso
-            .insert((p.puerto, p.pid), EstadoCierre::Cerrando);
+            .insert((p.pid, p.inicio), EstadoCierre::Cerrando);
         let tx = self.tx_cierre.clone();
         let ctx = ctx.clone();
         thread::spawn(move || {
@@ -286,7 +286,7 @@ impl Monitor {
         forzar: bool,
         r: puertos::ResultadoCierre,
     ) {
-        let clave = (p.puerto, p.pid);
+        let clave = (p.pid, p.inicio);
         if r == puertos::ResultadoCierre::NoResponde && !forzar {
             self.en_curso.insert(clave, EstadoCierre::NoResponde);
             return;
@@ -295,7 +295,7 @@ impl Monitor {
         if r.quita_fila()
             && let Some(Ok(lista)) = &mut self.puertos
         {
-            lista.retain(|x| (x.puerto, x.pid) != clave);
+            lista.retain(|x| (x.pid, x.inicio) != clave);
         }
         let (texto, ok) = puertos::mensaje_resultado(r, p.puerto);
         self.aviso = Some(Aviso {
@@ -305,11 +305,11 @@ impl Monitor {
         });
     }
 
-    /// Guarda una lectura nueva de puertos y olvida los cierres de filas que ya no existen.
+    /// Guarda una lectura nueva de puertos y olvida los cierres de procesos que ya no existen.
     fn actualizar_puertos(&mut self, nuevos: puertos::ResultadoLectura) {
         if let Ok(lista) = &nuevos {
             self.en_curso
-                .retain(|clave, _| lista.iter().any(|p| (p.puerto, p.pid) == *clave));
+                .retain(|clave, _| lista.iter().any(|p| (p.pid, p.inicio) == *clave));
         }
         self.puertos = Some(nuevos);
     }
@@ -923,7 +923,7 @@ impl Monitor {
                                 .on_hover_text(format!("{}\nPID {}", p.comando, p.pid));
                             });
                         });
-                        fila.col(|ui| match self.en_curso.get(&(p.puerto, p.pid)) {
+                        fila.col(|ui| match self.en_curso.get(&(p.pid, p.inicio)) {
                             Some(EstadoCierre::Cerrando) => {
                                 ui.spinner();
                                 ui.label("Cerrando…");
@@ -1205,5 +1205,46 @@ mod tests {
     fn formato_en_unidades_binarias() {
         assert_eq!(formato_bytes(512 * 1024 * 1024), "512 MiB");
         assert_eq!(formato_bytes(3 * 1024 * 1024 * 1024 / 2), "1.50 GiB");
+    }
+
+    #[test]
+    fn procesar_cierre_quita_todas_las_filas_del_mismo_pid() {
+        let ctx = egui::Context::default();
+        let mut monitor = Monitor::new(ctx);
+        let p1 = crate::puertos::PuertoInfo {
+            puerto: 3000,
+            pid: 1234,
+            nombre: "node".into(),
+            comando: "node server.js".into(),
+            inicio: 1000,
+            es_dev: true,
+        };
+        let p2 = crate::puertos::PuertoInfo {
+            puerto: 3001,
+            pid: 1234,
+            nombre: "node".into(),
+            comando: "node server.js".into(),
+            inicio: 1000,
+            es_dev: true,
+        };
+        let p3 = crate::puertos::PuertoInfo {
+            puerto: 8080,
+            pid: 5678,
+            nombre: "python".into(),
+            comando: "python app.py".into(),
+            inicio: 2000,
+            es_dev: true,
+        };
+        monitor.puertos = Some(Ok(vec![p1.clone(), p2.clone(), p3.clone()]));
+        monitor
+            .en_curso
+            .insert((1234, 1000), EstadoCierre::Cerrando);
+
+        monitor.procesar_cierre(p1, false, crate::puertos::ResultadoCierre::Cerrado);
+
+        let lista = monitor.puertos.unwrap().unwrap();
+        assert_eq!(lista.len(), 1);
+        assert_eq!(lista[0].puerto, 8080);
+        assert!(!monitor.en_curso.contains_key(&(1234, 1000)));
     }
 }
