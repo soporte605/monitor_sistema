@@ -11,8 +11,10 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 - La documentación de la pestaña Puertos describe la insignia **dev** tal como se ve en la app (#42, gracias a @Tiyatrotist).
 - Queda documentada en el código la ventana teórica entre comprobar la hora de inicio de un proceso y enviarle la señal de cierre, y por qué el riesgo es despreciable (#43, gracias a @Tiyatrotist).
 - Los tests que lanzan un proceso auxiliar lo terminan siempre, aunque el test falle, para no dejar procesos huérfanos (#44, gracias a @Tiyatrotist).
+- Con la ventana minimizada ya no se buscan puertos en segundo plano; la lectura se reanuda al volver a mostrarla (#45, gracias a @Tiyatrotist).
 
 ### Corregido
+- Si un proceso escucha en varios puertos, al terminarlo todas sus filas pasan a «Cerrando…» y desaparecen juntas, en lugar de solo la fila pulsada (#46, gracias a @Tiyatrotist).
 - El porcentaje de CPU de cada proceso ahora representa su uso de la capacidad total, en la misma escala que el CPU global, incluso si usa varios hilos (#30).
 
 ## [0.3.1] - 2026-09-27
